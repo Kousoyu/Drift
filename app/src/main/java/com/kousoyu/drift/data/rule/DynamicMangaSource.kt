@@ -35,12 +35,23 @@ class DynamicMangaSource(
     /**
      * Fetches [url] with mirror fallback.
      * If the primary base URL fails, transparently retries each mirror in order.
+     * For absolute URLs whose domain matches a known candidate, the domain is
+     * swapped to the current mirror so that fallback actually works.
      */
     private fun fetch(url: String): String {
         var lastError: Throwable = IllegalStateException("No candidates")
         for (base in candidates) {
-            val resolvedUrl = if (url.startsWith("http")) url
-                             else "${base.removeSuffix("/")}/${url.removePrefix("/")}"
+            val resolvedUrl = if (url.startsWith("http")) {
+                // If URL belongs to a known domain, swap it to the current candidate
+                val matchedBase = candidates.find { url.startsWith(it) }
+                if (matchedBase != null && matchedBase != base) {
+                    url.replaceFirst(matchedBase, base)
+                } else {
+                    url
+                }
+            } else {
+                "${base.removeSuffix("/")}/${url.removePrefix("/")}"
+            }
             try {
                 val reqBuilder = Request.Builder().url(resolvedUrl).get()
                 defaultHeaders.forEach { (k, v) -> reqBuilder.header(k, v) }
