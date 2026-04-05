@@ -180,57 +180,101 @@ class CopyMangaSource(private val client: OkHttpClient = buildClient()) : MangaS
             // ── Step 1: Fetch chapter HTML page (with mirror fallback) ──────────
             // The chapter page contains:
             //   • var cct = '...'       ← the AES key (16 printable chars)
-            //   • var contentKey = '…'  ← IV(16) + hex-ciphertext
             val (chapHtml, _) = getWithMirror(
                 candidates = webCandidates,
                 path       = "/comic/$slug/chapter/$uuid"
             )
 
-            Log.d("CopyManga", "Chapter HTML length: ${chapHtml.length}, starts with: ${chapHtml.take(300)}")
+            Log.d("CopyManga", "Chapter HTML length: ${chapHtml.length}")
 
-            // ── Step 2: Extract AES key ────────────────────────────────────────
-            // Variable name rotates (cct, ccz, dio, …) — match ANY var with exactly 16 chars.
-            // Site uses single quotes: var cct = 'op0zzpvv.nmn.o0p';
-            val aesKey = Regex("""var\s+\w+\s*=\s*['"](.{16})['"]""")
-                .findAll(chapHtml)
-                .map { it.groupValues[1] }
-                .firstOrNull()
-                .also { Log.d("CopyManga", "AES key found: $it") }
-                ?: run {
-                    Log.e("CopyManga", "KEY MISS. HTML snippet: ${chapHtml.take(2000)}")
-                    error("AES key not found in chapter HTML — site may have changed obfuscation")
-                }
-
-            // ── Step 3: Extract contentKey payload ────────────────────────────
-            val contentKey = Regex("""var\s+contentKey\s*=\s*'([^']+)'""")
+            // ── Step 2: Find the external JS file that holds the AES key ────────
+            // This page is a Vue.js SPA. The raw HTML shell does NOT contain
+            // `var cct` inline — it's injected by an external JS file:
+            //   https://s3.mangafunb.fun/static/websitefree/.../comic_content_pass{date}.js
+            // That file is referenced via a <script src="..."> tag in the HTML.
+            val passJsUrl = Regex("""<script[^>]+src=["']?(https?://[^\s"'>]+comic_content_pass[^\s"'>]+\.js)["']?""")
                 .find(chapHtml)?.groupValues?.get(1)
+                ?: Regex("""(https://s3\.mangafunb\.fun/static/websitefree/[^\s"'>]+comic_content_pass[^\s"'>]+\.js)""")
+                    .find(chapHtml)?.groupValues?.get(1)
 
-            if (contentKey != null && contentKey.length > 32) {
-                // Decrypt mode: IV = first 16 chars, ciphertext = rest (hex)
-                val decrypted = decryptPayload(contentKey, aesKey)
-                val json      = JSONObject(decrypted)
-                // The result may be nested differently, handle both known shapes
-                val imgArr    = json.optJSONArray("contents")
-                             ?: json.optJSONObject("results")?.optJSONArray("contents")
-                             ?: error("Unexpected decrypted JSON structure")
-                return@runCatching (0 until imgArr.length()).map { i ->
-                    imgArr.optString(i).ifEmpty {
-                        imgArr.optJSONObject(i)?.optString("url") ?: ""
+            Log.d("CopyManga", "pass JS URL: $passJsUrl")
+
+            // ── Step 3: Fetch the JS file and extract the AES key ───────────
+            // Key pattern in JS: var cct = 'xxxxxxxxxxxxxxxx'; (16 printable chars, single quotes)
+            val aesKey: String
+            if (passJsUrl != null) {
+                val jsContent = try { get(passJsUrl) }
+                                catch (e: Exception) {
+                                    Log.w("CopyManga", "Failed to fetch pass JS: ${e.message}")
+                                    ""
+                                }
+                aesKey = Regex("""var\s+\w+\s*=\s*['"](.{16})['"]""")
+                    .findAll(jsContent)
+                    .map { it.groupValues[1] }
+                    .firstOrNull()
+                    // Fallback: try the whole HTML (in case it's inline-injected in some mirrors)
+                    ?: Regex("""var\s+\w+\s*=\s*['"](.{16})['"]""")
+                        .findAll(chapHtml)
+                        .map { it.groupValues[1] }
+                        .firstOrNull()
+                    ?: run {
+                        Log.e("CopyManga", "KEY MISS in JS ($passJsUrl). JS snippet: ${jsContent.take(500)}")
+                        error("AES key not found in pass JS or chapter HTML")
                     }
-                }.filter { it.isNotEmpty() }
+            } else {
+                // pass JS URL not found in HTML — last resort: search the HTML itself
+                aesKey = Regex("""var\s+\w+\s*=\s*['"](.{16})['"]""")
+                    .findAll(chapHtml)
+                    .map { it.groupValues[1] }
+                    .firstOrNull()
+                    ?: run {
+                        Log.e("CopyManga", "KEY MISS. HTML tail: ${chapHtml.takeLast(1000)}")
+                        error("AES key not found — comic_content_pass JS URL is also missing from HTML")
+                    }
             }
+            Log.d("CopyManga", "AES key: $aesKey")
 
-            // ── Fallback: fetch via API and decrypt each content url ───────────
+            // ── Step 4: Extract contentKey payload ───────────────────────────
+            // Also an SPA-injected value. Try the external JS file first, then HTML.
+            val passJsContent = if (passJsUrl != null) {
+                try { get(passJsUrl) } catch (_: Exception) { chapHtml }
+            } else { chapHtml }
+
+            val contentKey = Regex("""var\s+contentKey\s*=\s*'([^']+)'""")
+                .find(passJsContent)?.groupValues?.get(1)
+                ?: Regex("""var\s+contentKey\s*=\s*'([^']+)'""")
+                    .find(chapHtml)?.groupValues?.get(1)
+
+            Log.d("CopyManga", "contentKey length: ${contentKey?.length}, passJsUrl: $passJsUrl")
+
+            // ── Fallback: fetch via API and decrypt each content url ──────────
             val dnts = Regex("""<span[^>]+id="dnt"[^>]+value="([^"]+)"""")
                 .find(chapHtml)?.groupValues?.get(1) ?: ""
 
+            // If contentKey found → decrypt it directly (no extra API call needed)
+            if (contentKey != null && contentKey.length > 32) {
+                val decrypted = decryptPayload(contentKey, aesKey)
+                val json      = JSONObject(decrypted)
+                val imgArr    = json.optJSONArray("contents")
+                             ?: json.optJSONObject("results")?.optJSONArray("contents")
+                             ?: error("Unexpected decrypted JSON structure: ${decrypted.take(200)}")
+                return@runCatching (0 until imgArr.length()).mapNotNull { i ->
+                    imgArr.optString(i).ifEmpty {
+                        imgArr.optJSONObject(i)?.optString("url") ?: ""
+                    }.takeIf { it.isNotEmpty() }
+                }
+            }
+
+            // ── Fallback: fetch chapter images via API and decrypt each url ────
             val chapJson = try {
                 get("$apiBase/comic/$slug/chapter/$uuid", mapOf("dnts" to dnts))
             } catch (_: Exception) {
                 get("$apiMirror/comic/$slug/chapter/$uuid", mapOf("dnts" to dnts))
             }
-            val chapterObj = JSONObject(chapJson).getJSONObject("results").getJSONObject("chapter")
-            val contentsArr = chapterObj.getJSONArray("contents")
+            val contentsArr = JSONObject(chapJson)
+                .getJSONObject("results")
+                .getJSONObject("chapter")
+                .getJSONArray("contents")
 
             val firstUrl = contentsArr.optJSONObject(0)?.optString("url", "") ?: ""
             (0 until contentsArr.length()).map { i ->
