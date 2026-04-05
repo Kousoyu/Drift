@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit
 
 object OtaManager {
     // This URL will be replaced by the raw github URL once committed!
-    private const val OTA_URL = "https://raw.githubusercontent.com/Kousoyu/Drift/main/rules/sources.json"
+    private const val OTA_URL = "https://raw.githubusercontent.com/Kousoyu/Drift/master/rules/sources.json"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
