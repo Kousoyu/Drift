@@ -6,11 +6,11 @@
     "enabled": true,
     "searchRule": {
       "popularFormat": "/",
-      "urlFormat": "/s?q={query}",
+      "urlFormat": "/search?q={query}",
       "listSelector": ".pure-u-1-2.pure-u-md-1-4",
-      "titleSelector": ".comics-card__title@text",
+      "titleSelector": "h3@text",
       "coverSelector": "img@src",
-      "urlSelector": "a@href"
+      "urlSelector": "a.comics-card__poster@href"
     },
     "detailRule": {
       "titleSelector": "h1.comics-detail__title@text",
