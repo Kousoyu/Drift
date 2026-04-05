@@ -21,34 +21,31 @@ import javax.crypto.spec.SecretKeySpec
 /**
  * CopyManga (拷贝漫画) Native Source Plugin
  *
- * Decryption architecture (browser-verified 2025-04):
+ * Architecture (confirmed by browser inspection + OkHttp logcat diagnostics):
  *
- *   The chapter page HTML contains two values in inline <script> tags:
- *     • var cct  = 'xxxxxxxxxxxxxxxx'  ← AES key (16 chars, any printable)
- *     • var contentKey = '<IV_16chars><HEX_ciphertext>'
+ *   The site is a Vue.js SPA. The AES key (`var cct`) is NOT in the static HTML.
+ *   It lives in an external JS file:
+ *     https://s3.mangafunb.fun/static/websitefree/js20190704/comic_content_pass{version}.js
  *
- *   Decryption:
- *     key      = UTF-8 bytes of `cct`    (16 bytes)
- *     IV       = UTF-8 bytes of contentKey.substring(0, 16)
- *     payload  = hexToBytes(contentKey.substring(16))
- *     result   = AES-CBC-PKCS7(payload, key, IV)  → JSON with image URLs
+ *   The `version` (e.g. "202508141534") is returned by the chapter API response
+ *   as a field named `js_version` (or equivalent). This keeps our code self-healing:
+ *   when CopyManga rotates the key, the API response carries the new version string,
+ *   we fetch the new JS file, and decryption continues without any APK update.
  *
- *   The comic detail page uses `ccz` for the same key value.
- *   Variable names rotate, so we scan for the pattern rather than hard-coding names.
+ *   Decryption (AES-CBC-PKCS7):
+ *     key   = UTF-8 bytes of `cct` (16 chars from pass JS)
+ *     IV    = UTF-8 bytes of contentKey[0..15]
+ *     data  = hexToBytes(contentKey[16..])
  *
- * Self-healing:
- *   Keys are scraped live from the chapter HTML, so key rotations require NO APK update.
- *
- * Mirror fallback:
- *   www.mangacopy.com is sometimes more stable in CN than copymanga.tv.
- *   webCandidates are tried in order; first success wins.
+ *   Mirror fallback:
+ *     The API (api.mangacopy.com) is usually accessible in mainland China directly.
+ *     Web pages (for HTML/JS fetches) try webCandidates[] in order.
  */
 class CopyMangaSource(private val client: OkHttpClient = buildClient()) : MangaSource {
 
     override val name    = "拷贝漫画"
     override val baseUrl = "https://www.mangacopy.com"
 
-    /** Web mirrors in priority order. Add new mirrors here; no logic change needed. */
     private val webCandidates = listOf(
         "https://www.mangacopy.com",
         "https://copymanga.site",
@@ -58,6 +55,9 @@ class CopyMangaSource(private val client: OkHttpClient = buildClient()) : MangaS
 
     private val apiBase   = "https://api.mangacopy.com/api/v3"
     private val apiMirror = "https://api.copy20.com/api/v3"
+
+    // Base URL for S3 static assets (JS files, images, etc.)
+    private val s3Base    = "https://s3.mangafunb.fun"
 
     // ─── HTTP Headers ─────────────────────────────────────────────────────────
 
@@ -81,7 +81,6 @@ class CopyMangaSource(private val client: OkHttpClient = buildClient()) : MangaS
         return res.body!!.string()
     }
 
-    /** Tries each base+path combination; returns (body, successfulBase). */
     private fun getWithMirror(
         candidates: List<String>,
         path: String,
@@ -172,152 +171,131 @@ class CopyMangaSource(private val client: OkHttpClient = buildClient()) : MangaS
 
     override suspend fun getChapterImages(chapterUrl: String): Result<List<String>> = withContext(Dispatchers.IO) {
         runCatching {
-            // URL: /comic/{slug}/chapter/{uuid}
             val parts = chapterUrl.trimEnd('/').split("/")
             val uuid  = parts.last()
             val slug  = parts[parts.size - 3]
 
-            // ── Step 1: Fetch chapter HTML page (with mirror fallback) ──────────
-            // The chapter page contains:
-            //   • var cct = '...'       ← the AES key (16 printable chars)
-            val (chapHtml, _) = getWithMirror(
-                candidates = webCandidates,
-                path       = "/comic/$slug/chapter/$uuid"
-            )
+            // ── Step 1: Call chapter API ───────────────────────────────────────
+            // The response may contain `js_version` which identifies the current
+            // comic_content_pass JS file holding the AES key.
+            val chapJson = try {
+                get("$apiBase/comic/$slug/chapter/$uuid")
+            } catch (_: Exception) {
+                get("$apiMirror/comic/$slug/chapter/$uuid")
+            }
+            Log.d("CopyManga", "API response (600): ${chapJson.take(600)}")
 
-            Log.d("CopyManga", "Chapter HTML length: ${chapHtml.length}")
+            val results  = JSONObject(chapJson).getJSONObject("results")
+            val chapObj  = results.getJSONObject("chapter")
+            Log.d("CopyManga", "chapter field keys: ${chapObj.keys().asSequence().joinToString()}")
 
-            // ── Step 2: Find the comic_content_pass JS URL ────────────────────
-            // This is a Vue.js SPA. The pass JS URL is NOT in the static HTML.
-            // It's dynamically imported by the Vue router when rendering the chapter page.
-            // Strategy:
-            //   1. Search the HTML directly for any comic_content_pass URL (in case a mirror embeds it)
-            //   2. Find the main Vue app bundle JS URL from the HTML script tags
-            //   3. Fetch the app bundle and look for the pass JS URL inside it
+            // ── Step 2: Check if content is already plain URLs ─────────────────
+            val contentsArr = chapObj.optJSONArray("contents")
+            val firstUrl    = contentsArr?.optJSONObject(0)?.optString("url", "") ?: ""
+            Log.d("CopyManga", "firstUrl sample: ${firstUrl.take(80)}")
 
-            // --- Pass A: direct URL in HTML ---
-            var passJsUrl = Regex("""(https://[^\s"'<>]+comic_content_pass[^\s"'<>]+\.js)""")
-                .find(chapHtml)?.groupValues?.get(1)
-
-            // --- Pass B: find app bundle JS URL from HTML <script src> tags ---
-            if (passJsUrl == null) {
-                val appScriptUrls = Regex("""<script[^>]+src=["']?(https://s3\.mangafunb\.fun/[^\s"'<>]+\.js)["']?""")
-                    .findAll(chapHtml)
-                    .map { it.groupValues[1] }
-                    .filter { "cdn" !in it }  // exclude CDN (vue, vant, axios, etc.)
-                    .toList()
-                Log.d("CopyManga", "App bundle JS URLs found: $appScriptUrls")
-
-                // Also log ALL script src for full picture
-                val allScripts = Regex("""<script[^>]+src=["']?([^\s"'<>]+)["']?""")
-                    .findAll(chapHtml).map { it.groupValues[1] }.toList()
-                Log.d("CopyManga", "ALL script src (${allScripts.size}): ${allScripts.joinToString()}")
-
-                // Fetch each app bundle and search for comic_content_pass reference
-                for (appJsUrl in appScriptUrls) {
-                    try {
-                        val appJs = get(appJsUrl)
-                        val urlInAppJs = Regex("""(https://[^\s"']+comic_content_pass[^\s"']+\.js)""")
-                            .find(appJs)?.groupValues?.get(1)
-                            ?: Regex("""comic_content_pass[\w.]+\.js""")
-                                .find(appJs)?.groupValues?.get(0)?.let {
-                                    "https://s3.mangafunb.fun/static/websitefree/js20190704/$it"
-                                }
-                        if (urlInAppJs != null) {
-                            passJsUrl = urlInAppJs
-                            Log.d("CopyManga", "pass JS found in app bundle: $passJsUrl")
-                            break
-                        }
-                    } catch (e: Exception) {
-                        Log.w("CopyManga", "Failed to fetch app bundle $appJsUrl: ${e.message}")
-                    }
+            if (contentsArr != null && firstUrl.startsWith("http")) {
+                Log.d("CopyManga", "Contents are plain URLs, returning directly")
+                return@runCatching (0 until contentsArr.length()).map { i ->
+                    contentsArr.getJSONObject(i).getString("url")
                 }
             }
-            Log.d("CopyManga", "pass JS URL: $passJsUrl")
 
+            // ── Step 3: Find the pass JS version ──────────────────────────────
+            // Try: js_version in chapter obj, results obj, or search by pattern
+            val jsVersion = chapObj.optString("js_version").ifEmpty { null }
+                         ?: results.optString("js_version").ifEmpty { null }
+                         ?: chapObj.optString("passVersion").ifEmpty { null }
+            Log.d("CopyManga", "js_version from API: $jsVersion")
 
-            // ── Step 3: Fetch the JS file and extract the AES key ───────────
-            // Key pattern in JS: var cct = 'xxxxxxxxxxxxxxxx'; (16 printable chars, single quotes)
-            val aesKey: String
-            if (passJsUrl != null) {
-                val jsContent = try { get(passJsUrl) }
-                                catch (e: Exception) {
-                                    Log.w("CopyManga", "Failed to fetch pass JS: ${e.message}")
-                                    ""
-                                }
-                aesKey = Regex("""var\s+\w+\s*=\s*['"](.{16})['"]""")
-                    .findAll(jsContent)
-                    .map { it.groupValues[1] }
-                    .firstOrNull()
-                    // Fallback: try the whole HTML (in case it's inline-injected in some mirrors)
-                    ?: Regex("""var\s+\w+\s*=\s*['"](.{16})['"]""")
-                        .findAll(chapHtml)
-                        .map { it.groupValues[1] }
-                        .firstOrNull()
-                    ?: run {
-                        Log.e("CopyManga", "KEY MISS in JS ($passJsUrl). JS snippet: ${jsContent.take(500)}")
-                        error("AES key not found in pass JS or chapter HTML")
-                    }
+            // ── Step 4: Find pass JS URL ───────────────────────────────────────
+            val passJsUrl: String? = if (jsVersion != null) {
+                "$s3Base/static/websitefree/js20190704/comic_content_pass$jsVersion.js"
             } else {
-                // pass JS URL not found in HTML — last resort: search the HTML itself
-                aesKey = Regex("""var\s+\w+\s*=\s*['"](.{16})['"]""")
-                    .findAll(chapHtml)
-                    .map { it.groupValues[1] }
-                    .firstOrNull()
-                    ?: run {
-                        Log.e("CopyManga", "KEY MISS. HTML tail: ${chapHtml.takeLast(1000)}")
-                        error("AES key not found — comic_content_pass JS URL is also missing from HTML")
-                    }
-            }
-            Log.d("CopyManga", "AES key: $aesKey")
+                // Fallback: fetch chapter page HTML, find app bundle, search inside it
+                val (chapHtml, _) = getWithMirror(
+                    candidates = webCandidates,
+                    path       = "/comic/$slug/chapter/$uuid"
+                )
+                Log.d("CopyManga", "HTML length: ${chapHtml.length}")
 
-            // ── Step 4: Extract contentKey payload ───────────────────────────
-            // Also an SPA-injected value. Try the external JS file first, then HTML.
-            val passJsContent = if (passJsUrl != null) {
-                try { get(passJsUrl) } catch (_: Exception) { chapHtml }
-            } else { chapHtml }
-
-            val contentKey = Regex("""var\s+contentKey\s*=\s*'([^']+)'""")
-                .find(passJsContent)?.groupValues?.get(1)
-                ?: Regex("""var\s+contentKey\s*=\s*'([^']+)'""")
+                // Direct URL in HTML
+                var found = Regex("""(https://[^\s"'<>]+comic_content_pass[^\s"'<>]+\.js)""")
                     .find(chapHtml)?.groupValues?.get(1)
 
-            Log.d("CopyManga", "contentKey length: ${contentKey?.length}, passJsUrl: $passJsUrl")
+                // Search inside Vue app bundles for js20190704 reference
+                if (found == null) {
+                    val appBundles = Regex("""<script[^>]+src=["']?(https://s3\.mangafunb\.fun/[^\s"'<>]+\.js)["']?""")
+                        .findAll(chapHtml).map { it.groupValues[1] }
+                        .filter { "cdn" !in it }.toList()
+                    Log.d("CopyManga", "app bundles: $appBundles")
 
-            // ── Fallback: fetch via API and decrypt each content url ──────────
-            val dnts = Regex("""<span[^>]+id="dnt"[^>]+value="([^"]+)"""")
-                .find(chapHtml)?.groupValues?.get(1) ?: ""
+                    for (bundleUrl in appBundles) {
+                        try {
+                            val js = get(bundleUrl)
+                            // Look for js20190704 folder reference (less likely to be split)
+                            val snippet = Regex("""js20190704[^\s"']{0,100}""").find(js)?.value
+                            Log.d("CopyManga", "js20190704 snippet in $bundleUrl: $snippet")
 
-            // If contentKey found → decrypt it directly (no extra API call needed)
-            if (contentKey != null && contentKey.length > 32) {
-                val decrypted = decryptPayload(contentKey, aesKey)
-                val json      = JSONObject(decrypted)
-                val imgArr    = json.optJSONArray("contents")
-                             ?: json.optJSONObject("results")?.optJSONArray("contents")
-                             ?: error("Unexpected decrypted JSON structure: ${decrypted.take(200)}")
-                return@runCatching (0 until imgArr.length()).mapNotNull { i ->
-                    imgArr.optString(i).ifEmpty {
-                        imgArr.optJSONObject(i)?.optString("url") ?: ""
-                    }.takeIf { it.isNotEmpty() }
+                            found = Regex("""https://[^\s"']+js20190704[^\s"']+\.js""").find(js)?.value
+                                ?: snippet?.let {
+                                    Regex("""comic_content_pass([\w.]+)\.js""").find(it)
+                                        ?.groupValues?.get(1)
+                                        ?.let { ver -> "$s3Base/static/websitefree/js20190704/comic_content_pass$ver.js" }
+                                }
+                            if (found != null) break
+                        } catch (e: Exception) {
+                            Log.w("CopyManga", "bundle fetch error: ${e.message}")
+                        }
+                    }
+                }
+                found
+            }
+            Log.d("CopyManga", "passJsUrl: $passJsUrl")
+
+            // ── Step 5: Fetch pass JS and extract AES key ─────────────────────
+            if (passJsUrl == null) {
+                error("Cannot locate comic_content_pass JS (js_version not in API, not in HTML)")
+            }
+
+            val passJs = try { get(passJsUrl) } catch (e: Exception) {
+                error("Failed to fetch pass JS ($passJsUrl): ${e.message}")
+            }
+            Log.d("CopyManga", "pass JS length: ${passJs.length}, snippet: ${passJs.take(200)}")
+
+            val aesKey = Regex("""var\s+\w+\s*=\s*['"](.{16})['"]""")
+                .findAll(passJs).map { it.groupValues[1] }.firstOrNull()
+                ?: error("AES key not found in pass JS. Snippet: ${passJs.take(300)}")
+            Log.d("CopyManga", "AES key: $aesKey")
+
+            // ── Step 6: Decrypt ───────────────────────────────────────────────
+            if (contentsArr != null && firstUrl.matches(Regex("[0-9a-fA-F]{33,}"))) {
+                // Per-image encrypted mode
+                return@runCatching (0 until contentsArr.length()).map { i ->
+                    decryptPayload(contentsArr.getJSONObject(i).getString("url"), aesKey)
                 }
             }
 
-            // ── Fallback: fetch chapter images via API and decrypt each url ────
-            val chapJson = try {
-                get("$apiBase/comic/$slug/chapter/$uuid", mapOf("dnts" to dnts))
-            } catch (_: Exception) {
-                get("$apiMirror/comic/$slug/chapter/$uuid", mapOf("dnts" to dnts))
+            // Whole-blob encrypted mode (contentKey = IV + hex-ciphertext)
+            val contentKey = chapObj.optString("content_key").ifEmpty { null }
+                          ?: chapObj.optString("contentKey").ifEmpty { null }
+            if (contentKey != null && contentKey.length > 32) {
+                val decrypted = decryptPayload(contentKey, aesKey)
+                val imgArr    = JSONObject(decrypted).optJSONArray("contents")
+                             ?: error("Unexpected decrypted JSON: ${decrypted.take(200)}")
+                return@runCatching (0 until imgArr.length()).mapNotNull { i ->
+                    imgArr.optJSONObject(i)?.optString("url")?.takeIf { it.isNotEmpty() }
+                }
             }
-            val contentsArr = JSONObject(chapJson)
-                .getJSONObject("results")
-                .getJSONObject("chapter")
-                .getJSONArray("contents")
 
-            val firstUrl = contentsArr.optJSONObject(0)?.optString("url", "") ?: ""
-            (0 until contentsArr.length()).map { i ->
-                val url = contentsArr.getJSONObject(i).getString("url")
-                if (firstUrl.matches(Regex("[0-9a-fA-F]{33,}"))) decryptPayload(url, aesKey) else url
+            // Last resort: return whatever is in contents
+            if (contentsArr != null && contentsArr.length() > 0) {
+                return@runCatching (0 until contentsArr.length()).map { i ->
+                    contentsArr.getJSONObject(i).getString("url")
+                }
             }
+
+            error("No decryptable content found in API response")
         }
     }
 
@@ -326,10 +304,7 @@ class CopyMangaSource(private val client: OkHttpClient = buildClient()) : MangaS
     // ─── AES-CBC-PKCS7 Decryption ─────────────────────────────────────────────
 
     /**
-     * Decrypt a CopyManga content payload.
-     *
-     * Format: first 16 chars of [payload] → IV (UTF-8)
-     *         remaining chars              → hex-encoded ciphertext
+     * payload: first 16 chars → IV (UTF-8), rest → hex-encoded ciphertext
      */
     private fun decryptPayload(payload: String, key: String): String {
         val iv          = IvParameterSpec(payload.substring(0, 16).toByteArray(Charsets.UTF_8))
@@ -346,13 +321,9 @@ class CopyMangaSource(private val client: OkHttpClient = buildClient()) : MangaS
     }
 
     companion object {
-        private const val TAG = "CopyManga"
-
         fun buildClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(12, TimeUnit.SECONDS)
             .readTimeout(20, TimeUnit.SECONDS)
-            // In-memory cookie jar: lets us share session cookies across requests
-            // (some chapter pages require the session cookie set on the domain root)
             .cookieJar(object : CookieJar {
                 private val store = mutableMapOf<String, MutableList<Cookie>>()
                 override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
