@@ -346,16 +346,20 @@ fun MangaScreen(
         }
 
         // ── Slim top loading indicator when refreshing with existing data ──
+        val loaderTopInset = androidx.compose.foundation.layout.WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+        val tightLoaderTop = androidx.compose.ui.unit.max(0.dp, loaderTopInset - 26.dp)
+
         AnimatedVisibility(
             visible = isRefreshing,
-            modifier = Modifier.align(Alignment.TopCenter),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .padding(top = tightLoaderTop),
             enter = fadeIn(),
             exit = fadeOut()
         ) {
             LinearProgressIndicator(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .statusBarsPadding()
                     .height(2.dp),
                 color = MaterialTheme.colorScheme.primary,
                 trackColor = Color.Transparent
