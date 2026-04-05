@@ -6,7 +6,7 @@
     "enabled": true,
     "searchRule": {
       "popularFormat": "/",
-      "urlFormat": "/search?q={query}&type=all",
+      "urlFormat": "/?s={query}",
       "listSelector": "a[href^='/manga/']",
       "titleSelector": "@title",
       "coverSelector": "img@src",
@@ -31,7 +31,8 @@
     "name": "漫画库",
     "baseUrl": "https://www.manhuaku.com",
     "mirrorUrls": [],
-    "enabled": true,
+    "enabled": false,
+    "_comment": "域名无法解析，临时下线。待确认正确域名后重新启用。",
     "searchRule": {
       "popularFormat": "/rank/",
       "urlFormat": "/search/?keywords={query}",

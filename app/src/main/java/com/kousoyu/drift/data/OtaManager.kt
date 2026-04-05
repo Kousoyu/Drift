@@ -39,7 +39,7 @@ object OtaManager {
     "enabled": true,
     "searchRule": {
       "popularFormat": "/",
-      "urlFormat": "/search?q={query}&type=all",
+      "urlFormat": "/?s={query}",
       "listSelector": "a[href^=/manga/]",
       "titleSelector": "@title",
       "coverSelector": "img@src",
@@ -64,7 +64,7 @@ object OtaManager {
     "name": "漫画库",
     "baseUrl": "https://www.manhuaku.com",
     "mirrorUrls": [],
-    "enabled": true,
+    "enabled": false,
     "searchRule": {
       "popularFormat": "/rank/",
       "urlFormat": "/search/?keywords={query}",
