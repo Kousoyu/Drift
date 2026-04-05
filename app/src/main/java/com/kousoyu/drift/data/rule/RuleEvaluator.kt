@@ -36,7 +36,9 @@ object RuleEvaluator {
         }
 
         val atIdx = rule.lastIndexOf('@')
-        val selector  = if (atIdx > 0) rule.substring(0, atIdx).trim() else rule.trim()
+        // atIdx >= 0: extract selector before '@' (empty string when rule starts with '@', e.g. "@href")
+        // atIdx <  0: no '@' at all, treat whole rule as CSS selector with default "text" extractor
+        val selector  = if (atIdx >= 0) rule.substring(0, atIdx).trim() else rule.trim()
         val extractor = if (atIdx >= 0) rule.substring(atIdx + 1).trim() else "text"
 
         val targetElement = if (selector.isEmpty()) element else element.selectFirst(selector)
