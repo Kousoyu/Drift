@@ -39,9 +39,9 @@ object OtaManager {
     "enabled": true,
     "searchRule": {
       "popularFormat": "/",
-      "urlFormat": "/?s={query}",
-      "listSelector": "a[href^=/manga/]",
-      "titleSelector": "@title",
+      "urlFormat": "/s?q={query}",
+      "listSelector": "a[href*=/manga/]",
+      "titleSelector": "h3@text",
       "coverSelector": "img@src",
       "urlSelector": "@href"
     },

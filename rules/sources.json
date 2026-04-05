@@ -6,24 +6,24 @@
     "enabled": true,
     "searchRule": {
       "popularFormat": "/",
-      "urlFormat": "/?s={query}",
-      "listSelector": "a[href^='/manga/']",
-      "titleSelector": "@title",
+      "urlFormat": "/s?q={query}",
+      "listSelector": "a[href*='/manga/']",
+      "titleSelector": "h3@text",
       "coverSelector": "img@src",
       "urlSelector": "@href"
     },
     "detailRule": {
       "titleSelector": "h1@text",
-      "coverSelector": "img.detail-info-cover@src",
+      "coverSelector": "img@src",
       "authorSelector": "h2@text",
       "descSelector": "p@text",
-      "statusSelector": "span.detail-info-tip-block-content@text",
+      "statusSelector": "span@text",
       "chapterListSelector": "a[href*='/manga/'][href*='-']",
       "chapterNameSelector": "@text",
       "chapterUrlSelector": "@href"
     },
     "chapterImagesRule": {
-      "imageListSelector": "amp-img, img.comic-contain",
+      "imageListSelector": "amp-img, img",
       "imageUrlSelector": "@src"
     }
   },
