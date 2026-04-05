@@ -4,21 +4,23 @@ import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import okhttp3.OkHttpClient
 import com.kousoyu.drift.data.sources.ManhuaguiSource
+import com.kousoyu.drift.data.sources.CopyMangaSource
 
 object SourceManager {
 
     private val client = OkHttpClient()
 
-    // ── ManhuaguiSource is the only "native" (hardcoded) plugin ──────────────
-    // It stays native because it needs JS unpacking / LZString decryption that
-    // cannot be expressed in a simple CSS/JSON rule.
+    // ── Native plugins (hardcoded because they need custom algorithm logic) ───
+    // ManhuaguiSource : LZString + JS unpacking for chapter images
+    // CopyMangaSource : AES-CBC decryption with live-scraped key (self-healing)
     private val manhuaguiSource = ManhuaguiSource(client)
+    private val copyMangaSource = CopyMangaSource(client)
 
     // ── The virtual aggregate source is always present ────────────────────────
     private val aggregateSource = AggregateSource()
 
     // ── Full source list: aggregate first, then native, then dynamic (OTA) ────
-    var sources: List<MangaSource> = listOf(aggregateSource, manhuaguiSource)
+    var sources: List<MangaSource> = listOf(aggregateSource, manhuaguiSource, copyMangaSource)
         private set
 
     val currentSource = MutableStateFlow<MangaSource>(sources.first())
@@ -30,7 +32,7 @@ object SourceManager {
      */
     suspend fun initialize(context: Context) {
         val dynamicSources = OtaManager.fetchRemoteSources(context, client)
-        val newList = mutableListOf<MangaSource>(aggregateSource, manhuaguiSource)
+        val newList = mutableListOf<MangaSource>(aggregateSource, manhuaguiSource, copyMangaSource)
         newList.addAll(dynamicSources)
         sources = newList
 
@@ -45,7 +47,7 @@ object SourceManager {
 
     /** Legacy entry point kept for compatibility (e.g. OTA from within the app). */
     fun updateSources(remote: List<MangaSource>) {
-        val newSources = mutableListOf<MangaSource>(aggregateSource, manhuaguiSource)
+        val newSources = mutableListOf<MangaSource>(aggregateSource, manhuaguiSource, copyMangaSource)
         newSources.addAll(remote)
         sources = newSources
         if (sources.none { it.name == currentSource.value.name }) {
