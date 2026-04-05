@@ -41,10 +41,10 @@ object DriftRoutes {
     const val READER  = "reader?url={url}&mangaUrl={mangaUrl}&chapterName={chapterName}&sourceName={sourceName}"
     
     fun createDetailRoute(url: String, sourceName: String): String {
-        return "detail?url=${java.net.URLEncoder.encode(url, "UTF-8")}&sourceName=${java.net.URLEncoder.encode(sourceName, "UTF-8")}"
+        return "detail?url=${java.net.URLEncoder.encode(url, "UTF-8").replace("+", "%20")}&sourceName=${java.net.URLEncoder.encode(sourceName, "UTF-8").replace("+", "%20")}"
     }
     fun createReaderRoute(chapterUrl: String, mangaUrl: String, chapterName: String, sourceName: String): String {
-        return "reader?url=${java.net.URLEncoder.encode(chapterUrl, "UTF-8")}&mangaUrl=${java.net.URLEncoder.encode(mangaUrl, "UTF-8")}&chapterName=${java.net.URLEncoder.encode(chapterName, "UTF-8")}&sourceName=${java.net.URLEncoder.encode(sourceName, "UTF-8")}"
+        return "reader?url=${java.net.URLEncoder.encode(chapterUrl, "UTF-8").replace("+", "%20")}&mangaUrl=${java.net.URLEncoder.encode(mangaUrl, "UTF-8").replace("+", "%20")}&chapterName=${java.net.URLEncoder.encode(chapterName, "UTF-8").replace("+", "%20")}&sourceName=${java.net.URLEncoder.encode(sourceName, "UTF-8").replace("+", "%20")}"
     }
 }
 
