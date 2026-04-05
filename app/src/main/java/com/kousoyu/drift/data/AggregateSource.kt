@@ -31,7 +31,7 @@ class AggregateSource : MangaSource {
 
         sources.map { source ->
             launch(Dispatchers.IO) {
-                val items = withTimeoutOrNull(3000L) {
+                val items = withTimeoutOrNull(15_000L) {
                     source.getPopularManga().getOrNull()
                 } ?: return@launch
                 synchronized(accumulated) { accumulated.addAll(items) }
@@ -45,7 +45,7 @@ class AggregateSource : MangaSource {
         val accumulated = mutableListOf<Manga>()
         targetSources.map { source ->
             launch(Dispatchers.IO) {
-                val items = withTimeoutOrNull(3000L) {
+                val items = withTimeoutOrNull(15_000L) {
                     source.searchManga(query).getOrNull()
                 } ?: return@launch
                 synchronized(accumulated) { accumulated.addAll(items) }
@@ -61,7 +61,7 @@ class AggregateSource : MangaSource {
             runCatching {
                 val results = targetSources.map { source ->
                     async {
-                        withTimeoutOrNull(2500L) {
+                        withTimeoutOrNull(12_000L) {
                             source.getPopularManga().getOrNull()
                         } ?: emptyList()
                     }
@@ -75,7 +75,7 @@ class AggregateSource : MangaSource {
             runCatching {
                 val results = targetSources.map { source ->
                     async {
-                        withTimeoutOrNull(2500L) {
+                        withTimeoutOrNull(12_000L) {
                             source.searchManga(query).getOrNull()
                         } ?: emptyList()
                     }

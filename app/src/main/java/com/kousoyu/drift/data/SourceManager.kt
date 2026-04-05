@@ -8,7 +8,10 @@ import com.kousoyu.drift.data.sources.CopyMangaSource
 
 object SourceManager {
 
-    private val client = OkHttpClient()
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
+        .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+        .build()
 
     // ── Native plugins (hardcoded because they need custom algorithm logic) ───
     // ManhuaguiSource : LZString + JS unpacking for chapter images
