@@ -53,4 +53,7 @@ interface MangaSource {
     
     /** Extract the raw image URLs for a specific chapter page. */
     suspend fun getChapterImages(chapterUrl: String): Result<List<String>>
+
+    /** Return HTTP headers required for fetching images (e.g. Referer) */
+    fun getHeaders(): Map<String, String> = emptyMap()
 }

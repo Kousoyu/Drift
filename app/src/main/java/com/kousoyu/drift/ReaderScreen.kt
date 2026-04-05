@@ -65,6 +65,7 @@ fun ReaderScreen(
     // ── Aggressive Prefetching Engine ──
     if (viewModel.state is ReaderState.Success) {
         val images = (viewModel.state as ReaderState.Success).images
+        val headers = (viewModel.state as ReaderState.Success).headers
         val imageLoader = context.imageLoader
         
         LaunchedEffect(listState.firstVisibleItemIndex) {
@@ -81,7 +82,9 @@ fun ReaderScreen(
                     .diskCacheKey(cleanUrl)
                     .diskCachePolicy(CachePolicy.ENABLED)
                     .memoryCachePolicy(CachePolicy.ENABLED)
-                    // Down-prioritize distant images so they don't block immediate viewport decoding
+                    .apply {
+                        headers.forEach { (key, value) -> addHeader(key, value) }
+                    }
                     .build()
                 
                 // Enqueue in the background
@@ -145,7 +148,8 @@ fun ReaderScreen(
                             url = imageUrl,
                             pageNumber = index + 1,
                             totalPages = images.size,
-                            context = context
+                            context = context,
+                            headers = state.headers
                         )
                     }
 
@@ -234,7 +238,8 @@ private fun MangaPage(
     url: String,
     pageNumber: Int,
     totalPages: Int,
-    context: android.content.Context
+    context: android.content.Context,
+    headers: Map<String, String>
 ) {
     // Strip any #jm_scramble fragment for Coil (metadata only, not part of the URL)
     val cleanUrl = url.substringBefore("#")
@@ -251,6 +256,9 @@ private fun MangaPage(
             .memoryCachePolicy(CachePolicy.ENABLED)
             // Allow network fetch; Coil uses OkHttp's connection pool internally
             .networkCachePolicy(CachePolicy.ENABLED)
+            .apply {
+                headers.forEach { (key, value) -> addHeader(key, value) }
+            }
             .crossfade(true)
             .build()
     }

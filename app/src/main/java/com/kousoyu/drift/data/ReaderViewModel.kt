@@ -12,7 +12,7 @@ import androidx.lifecycle.AndroidViewModel
 import com.kousoyu.drift.data.local.DriftDatabase
 sealed class ReaderState {
     object Loading : ReaderState()
-    data class Success(val images: List<String>) : ReaderState()
+    data class Success(val images: List<String>, val headers: Map<String, String> = emptyMap()) : ReaderState()
     data class Error(val message: String) : ReaderState()
 }
 
@@ -53,7 +53,7 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 
                 targetSource.getChapterImages(url)
-                    .onSuccess { state = ReaderState.Success(it) }
+                    .onSuccess { state = ReaderState.Success(it, targetSource.getHeaders()) }
                     .onFailure { state = ReaderState.Error(it.message ?: "Failed to load chapter images") }
             } catch (e: Exception) {
                 state = ReaderState.Error(e.message ?: "Invalid URL")
