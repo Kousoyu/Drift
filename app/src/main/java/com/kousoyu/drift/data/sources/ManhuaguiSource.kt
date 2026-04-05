@@ -16,7 +16,7 @@ import java.io.IOException
 
 class ManhuaguiSource(private val client: OkHttpClient) : MangaSource {
     override val name: String = "漫画柜 (Native)"
-    override val baseUrl: String = "https://www.mhgui.com"
+    override val baseUrl: String = "https://tw.manhuagui.com"
     private val imageServer = arrayOf("https://i.hamreus.com", "https://cf.hamreus.com")
 
     override fun getHeaders(): Map<String, String> {
