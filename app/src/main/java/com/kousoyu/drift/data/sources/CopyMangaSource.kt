@@ -187,17 +187,54 @@ class CopyMangaSource(private val client: OkHttpClient = buildClient()) : MangaS
 
             Log.d("CopyManga", "Chapter HTML length: ${chapHtml.length}")
 
-            // ── Step 2: Find the external JS file that holds the AES key ────────
-            // This page is a Vue.js SPA. The raw HTML shell does NOT contain
-            // `var cct` inline — it's injected by an external JS file:
-            //   https://s3.mangafunb.fun/static/websitefree/.../comic_content_pass{date}.js
-            // That file is referenced via a <script src="..."> tag in the HTML.
-            val passJsUrl = Regex("""<script[^>]+src=["']?(https?://[^\s"'>]+comic_content_pass[^\s"'>]+\.js)["']?""")
-                .find(chapHtml)?.groupValues?.get(1)
-                ?: Regex("""(https://s3\.mangafunb\.fun/static/websitefree/[^\s"'>]+comic_content_pass[^\s"'>]+\.js)""")
-                    .find(chapHtml)?.groupValues?.get(1)
+            // ── Step 2: Find the comic_content_pass JS URL ────────────────────
+            // This is a Vue.js SPA. The pass JS URL is NOT in the static HTML.
+            // It's dynamically imported by the Vue router when rendering the chapter page.
+            // Strategy:
+            //   1. Search the HTML directly for any comic_content_pass URL (in case a mirror embeds it)
+            //   2. Find the main Vue app bundle JS URL from the HTML script tags
+            //   3. Fetch the app bundle and look for the pass JS URL inside it
 
+            // --- Pass A: direct URL in HTML ---
+            var passJsUrl = Regex("""(https://[^\s"'<>]+comic_content_pass[^\s"'<>]+\.js)""")
+                .find(chapHtml)?.groupValues?.get(1)
+
+            // --- Pass B: find app bundle JS URL from HTML <script src> tags ---
+            if (passJsUrl == null) {
+                val appScriptUrls = Regex("""<script[^>]+src=["']?(https://s3\.mangafunb\.fun/[^\s"'<>]+\.js)["']?""")
+                    .findAll(chapHtml)
+                    .map { it.groupValues[1] }
+                    .filter { "cdn" !in it }  // exclude CDN (vue, vant, axios, etc.)
+                    .toList()
+                Log.d("CopyManga", "App bundle JS URLs found: $appScriptUrls")
+
+                // Also log ALL script src for full picture
+                val allScripts = Regex("""<script[^>]+src=["']?([^\s"'<>]+)["']?""")
+                    .findAll(chapHtml).map { it.groupValues[1] }.toList()
+                Log.d("CopyManga", "ALL script src (${allScripts.size}): ${allScripts.joinToString()}")
+
+                // Fetch each app bundle and search for comic_content_pass reference
+                for (appJsUrl in appScriptUrls) {
+                    try {
+                        val appJs = get(appJsUrl)
+                        val urlInAppJs = Regex("""(https://[^\s"']+comic_content_pass[^\s"']+\.js)""")
+                            .find(appJs)?.groupValues?.get(1)
+                            ?: Regex("""comic_content_pass[\w.]+\.js""")
+                                .find(appJs)?.groupValues?.get(0)?.let {
+                                    "https://s3.mangafunb.fun/static/websitefree/js20190704/$it"
+                                }
+                        if (urlInAppJs != null) {
+                            passJsUrl = urlInAppJs
+                            Log.d("CopyManga", "pass JS found in app bundle: $passJsUrl")
+                            break
+                        }
+                    } catch (e: Exception) {
+                        Log.w("CopyManga", "Failed to fetch app bundle $appJsUrl: ${e.message}")
+                    }
+                }
+            }
             Log.d("CopyManga", "pass JS URL: $passJsUrl")
+
 
             // ── Step 3: Fetch the JS file and extract the AES key ───────────
             // Key pattern in JS: var cct = 'xxxxxxxxxxxxxxxx'; (16 printable chars, single quotes)
