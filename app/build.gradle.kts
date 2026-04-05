@@ -68,8 +68,9 @@ dependencies {
     // ─── Network & Parsing Engine ─────────────────────────────────────────────
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jsoup:jsoup:1.18.1")
-    // ─── Async Image Loading ──────────────────────────────────────────────────
+    // ─── Async Image Loading & Zooming ────────────────────────────────────────
     implementation("io.coil-kt:coil-compose:2.7.0")
+    implementation("me.saket.telephoto:zoomable-image-coil:0.7.1")
     // ─── Persistence (Room) ───────────────────────────────────────────────────
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")

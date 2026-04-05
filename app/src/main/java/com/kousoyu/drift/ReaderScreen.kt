@@ -26,6 +26,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.SubcomposeAsyncImage
 import coil.request.CachePolicy
 import coil.request.ImageRequest
+import coil.imageLoader
+import me.saket.telephoto.zoomable.rememberZoomableState
+import me.saket.telephoto.zoomable.zoomable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.ui.draw.clip
@@ -57,6 +60,35 @@ fun ReaderScreen(
 
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
+    val context = LocalContext.current
+
+    // ── Aggressive Prefetching Engine ──
+    if (viewModel.state is ReaderState.Success) {
+        val images = (viewModel.state as ReaderState.Success).images
+        val imageLoader = context.imageLoader
+        
+        LaunchedEffect(listState.firstVisibleItemIndex) {
+            // Initiate prefetch window for the next 20 images
+            val prefetchWindow = 20
+            val startIdx = (listState.firstVisibleItemIndex + 2).coerceIn(0, images.size)
+            val endIdx = (startIdx + prefetchWindow).coerceIn(0, images.size)
+            
+            for (i in startIdx until endIdx) {
+                val cleanUrl = images[i].substringBefore("#")
+                val request = ImageRequest.Builder(context)
+                    .data(cleanUrl)
+                    .memoryCacheKey(cleanUrl)
+                    .diskCacheKey(cleanUrl)
+                    .diskCachePolicy(CachePolicy.ENABLED)
+                    .memoryCachePolicy(CachePolicy.ENABLED)
+                    // Down-prioritize distant images so they don't block immediate viewport decoding
+                    .build()
+                
+                // Enqueue in the background
+                imageLoader.enqueue(request)
+            }
+        }
+    }
 
     Box(
         modifier = Modifier
@@ -186,6 +218,8 @@ fun ReaderScreen(
 //
 // Key design decisions:
 //  • Uses SubcomposeAsyncImage so we can inject Loading/Error sub-composables.
+//  • Telephoto Modifier.zoomable() enables extremely responsive pinch-to-zoom
+//    and pan-bounds tracking without killing parent LazyColumn scrolls.
 //  • Loading state has Modifier.heightIn(min = 600.dp) so the LazyColumn always
 //    has something to measure — the user can scroll freely WITHOUT WAITING for the
 //    image to download. The moment the image arrives it replaces the placeholder
@@ -221,11 +255,15 @@ private fun MangaPage(
             .build()
     }
 
+    val zoomableState = rememberZoomableState()
+
     SubcomposeAsyncImage(
         model = imageRequest,
         contentDescription = "第 $pageNumber 页",
         contentScale = ContentScale.FillWidth,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .zoomable(zoomableState),
         loading = {
             // ── PLACEHOLDER: full-width box with min-height so scroll is never
             // blocked even while bytes are still in flight.
