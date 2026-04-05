@@ -13,21 +13,59 @@ import org.json.JSONArray
 import java.util.concurrent.TimeUnit
 
 object OtaManager {
-    // This URL will be replaced by the raw github URL once committed!
     private const val OTA_URL = "https://raw.githubusercontent.com/Kousoyu/Drift/master/rules/sources.json"
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .build()
 
+    // Built-in fallback JSON to ensure the app works even if offline or GitHub Raw is blocked
+    private val FALLBACK_JSON = """
+    [
+      {
+        "name": "包子漫画",
+        "baseUrl": "https://www.baozimh.com",
+        "searchRule": {
+            "popularFormat": "/",
+            "urlFormat": "/search?type=all&q={query}",
+            "listSelector": "div.comics-card",
+            "titleSelector": "h3@text",
+            "coverSelector": "amp-img@src",
+            "urlSelector": "a.comics-card__poster@href"
+        },
+        "detailRule": {
+            "titleSelector": "h1.comics-detail__title@text",
+            "coverSelector": "amp-img@src",
+            "authorSelector": "h2.comics-detail__author@text",
+            "descSelector": "p.comics-detail__desc@text",
+            "statusSelector": "div.tag-list span.tag@text",
+            "chapterListSelector": "div.comics-chapters a",
+            "chapterNameSelector": "span@text",
+            "chapterUrlSelector": "@href"
+        },
+        "chapterImagesRule": {
+            "imageListSelector": "amp-img.comic-contain__item, img.comic-contain__item",
+            "imageUrlSelector": "@src"
+        }
+      }
+    ]
+    """.trimIndent()
+
     suspend fun fetchRemoteSources(): List<MangaSource> = withContext(Dispatchers.IO) {
         val sources = mutableListOf<MangaSource>()
+        var jsonString = FALLBACK_JSON
         try {
             val request = Request.Builder().url(OTA_URL).build()
             val response = client.newCall(request).execute()
-            if (!response.isSuccessful) return@withContext emptyList()
-            
-            val jsonString = response.body?.string() ?: return@withContext emptyList()
+            if (response.isSuccessful) {
+                jsonString = response.body?.string() ?: FALLBACK_JSON
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+            // network failed, fallback jsonString is preserved
+        }
+        
+        try {
             val array = JSONArray(jsonString)
 
             for (i in 0 until array.length()) {
