@@ -34,30 +34,32 @@ object OtaManager {
 [
   {
     "name": "包子漫画",
-    "baseUrl": "https://www.baozimh.org",
-    "mirrorUrls": ["https://www.baozimh.com", "https://baozimh.com"],
+    "baseUrl": "https://www.baozimh.com",
+    "mirrorUrls": ["https://www.baozimh.org", "https://baozimh.com", "https://www.zerobyw.com"],
     "enabled": true,
+    "headers": { "Referer": "https://www.baozimh.com/" },
     "searchRule": {
       "popularFormat": "/",
-      "urlFormat": "/s?q={query}",
-      "listSelector": "a[href*=/manga/]",
+      "urlFormat": "/search?q={query}",
+      "listSelector": ".pure-u-1-2.pure-u-md-1-4",
       "titleSelector": "h3@text",
-      "coverSelector": "img@src",
-      "urlSelector": "@href"
+      "coverSelector": "amp-img@src",
+      "urlSelector": "a.comics-card__poster@href"
     },
     "detailRule": {
-      "titleSelector": "h1@text",
-      "coverSelector": "img.detail-info-cover@src",
-      "authorSelector": "h2@text",
-      "descSelector": "p@text",
-      "statusSelector": "span.detail-info-tip-block-content@text",
-      "chapterListSelector": "a[href^=/manga/][href*=-]",
-      "chapterNameSelector": "@text",
+      "titleSelector": "h1.comics-detail__title@text",
+      "coverSelector": ".comics-detail__main amp-img@src",
+      "authorSelector": "h2.comics-detail__author@text",
+      "descSelector": "p.comics-detail__desc@text",
+      "statusSelector": ".comics-detail__info span@text",
+      "chapterListSelector": "a.comics-chapters__item",
+      "chapterNameSelector": "span@text",
       "chapterUrlSelector": "@href"
     },
     "chapterImagesRule": {
-      "imageListSelector": "amp-img, img.comic-contain",
-      "imageUrlSelector": "@src"
+      "imageListSelector": "amp-img[src], .comic-contain img[src]",
+      "imageUrlSelector": "@src",
+      "nextPageSelector": "a#next-chapter"
     }
   },
   {
@@ -185,7 +187,8 @@ object OtaManager {
                     chapterImagesRule = ChapterImagesRule(
                         imageListSelector = chapter.getString("imageListSelector"),
                         imageUrlSelector  = chapter.getString("imageUrlSelector"),
-                        imageBaseUrl      = chapter.optString("imageBaseUrl").ifEmpty { null }
+                        imageBaseUrl      = chapter.optString("imageBaseUrl").ifEmpty { null },
+                        nextPageSelector  = chapter.optString("nextPageSelector").ifEmpty { null }
                     )
                 )
                 sources.add(DynamicMangaSource(config, client))

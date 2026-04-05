@@ -9,18 +9,21 @@
       "urlFormat": "/search?q={query}",
       "listSelector": ".pure-u-1-2.pure-u-md-1-4",
       "titleSelector": "h3@text",
-      "coverSelector": "img@src",
+      "coverSelector": "amp-img@src",
       "urlSelector": "a.comics-card__poster@href"
     },
     "detailRule": {
       "titleSelector": "h1.comics-detail__title@text",
-      "coverSelector": ".comics-detail__main img@src",
+      "coverSelector": ".comics-detail__main amp-img@src",
       "authorSelector": "h2.comics-detail__author@text",
       "descSelector": "p.comics-detail__desc@text",
       "statusSelector": ".comics-detail__info span@text",
       "chapterListSelector": "a.comics-chapters__item",
       "chapterNameSelector": "span@text",
       "chapterUrlSelector": "@href"
+    },
+    "headers": {
+      "Referer": "https://www.baozimh.com/"
     },
     "chapterImagesRule": {
       "imageListSelector": "amp-img[src], .comic-contain img[src]",
