@@ -74,7 +74,7 @@ fun MangaScreenSkeleton() {
         // Skeleton: Header Row (greeting + source badge)
         item {
             val topPadding = androidx.compose.foundation.layout.WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-            val tightPadding = androidx.compose.ui.unit.max(0.dp, topPadding - 14.dp)
+            val tightPadding = androidx.compose.ui.unit.max(0.dp, topPadding - 26.dp)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -496,7 +496,7 @@ fun TopHeader(
     }
 
     val topInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-    val tightTop = androidx.compose.ui.unit.max(0.dp, topInset - 14.dp)
+    val tightTop = androidx.compose.ui.unit.max(0.dp, topInset - 26.dp)
 
     Column(
         modifier = Modifier
