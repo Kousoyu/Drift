@@ -41,7 +41,7 @@ object OtaManager {
     "searchRule": {
       "popularFormat": "/",
       "urlFormat": "/search?q={query}",
-      "listSelector": ".pure-u-1-2.pure-u-md-1-4",
+      "listSelector": ".comics-card",
       "titleSelector": "h3@text",
       "coverSelector": "amp-img@src",
       "urlSelector": "a.comics-card__poster@href"
