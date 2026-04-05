@@ -1,28 +1,58 @@
 [
   {
     "name": "包子漫画",
-    "baseUrl": "https://www.baozimh.com",
+    "baseUrl": "https://www.baozimh.org",
+    "mirrorUrls": ["https://www.baozimh.com", "https://baozimh.com"],
+    "enabled": true,
     "searchRule": {
-        "popularFormat": "/",
-        "urlFormat": "/search?type=all&q={query}",
-        "listSelector": "div.comics-card",
-        "titleSelector": "h3@text",
-        "coverSelector": "amp-img@src",
-        "urlSelector": "a.comics-card__poster@href"
+      "popularFormat": "/",
+      "urlFormat": "/search?q={query}&type=all",
+      "listSelector": "a[href^='/manga/']",
+      "titleSelector": "@title",
+      "coverSelector": "img@src",
+      "urlSelector": "@href"
     },
     "detailRule": {
-        "titleSelector": "h1.comics-detail__title@text",
-        "coverSelector": "amp-img@src",
-        "authorSelector": "h2.comics-detail__author@text",
-        "descSelector": "p.comics-detail__desc@text",
-        "statusSelector": "div.tag-list span.tag@text",
-        "chapterListSelector": "div.comics-chapters a",
-        "chapterNameSelector": "span@text",
-        "chapterUrlSelector": "@href"
+      "titleSelector": "h1@text",
+      "coverSelector": "img.detail-info-cover@src",
+      "authorSelector": "h2@text",
+      "descSelector": "p@text",
+      "statusSelector": "span.detail-info-tip-block-content@text",
+      "chapterListSelector": "a[href*='/manga/'][href*='-']",
+      "chapterNameSelector": "@text",
+      "chapterUrlSelector": "@href"
     },
     "chapterImagesRule": {
-        "imageListSelector": "amp-img.comic-contain__item, img.comic-contain__item",
-        "imageUrlSelector": "@src"
+      "imageListSelector": "amp-img, img.comic-contain",
+      "imageUrlSelector": "@src"
+    }
+  },
+  {
+    "name": "漫画库",
+    "baseUrl": "https://www.manhuaku.com",
+    "mirrorUrls": [],
+    "enabled": true,
+    "searchRule": {
+      "popularFormat": "/rank/",
+      "urlFormat": "/search/?keywords={query}",
+      "listSelector": "div.book-list li",
+      "titleSelector": "p.title@text",
+      "coverSelector": "img@src",
+      "urlSelector": "a@href"
+    },
+    "detailRule": {
+      "titleSelector": "h1.book-title@text",
+      "coverSelector": "div.book-cover img@src",
+      "authorSelector": "a.book-author@text",
+      "descSelector": "p.book-intro@text",
+      "statusSelector": "span.book-status@text",
+      "chapterListSelector": "ul.chapter-list a",
+      "chapterNameSelector": "@text",
+      "chapterUrlSelector": "@href"
+    },
+    "chapterImagesRule": {
+      "imageListSelector": "div.reader-main img",
+      "imageUrlSelector": "@src"
     }
   }
 ]

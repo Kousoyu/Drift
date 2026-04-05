@@ -24,11 +24,26 @@ object Unpacker {
      * Note: single quotes `\'` in the data will be replaced with double quotes `"`.
      */
     fun unpack(script: SubstringExtractor, left: String? = null, right: String? = null): String {
-        val packed = script
-            .substringBetween("}('", ".split('|'),0,{}))")
-            .replace("\\'", "\"")
+        // Handle both )) and ) cases by extracting to .split('|') and then picking the rest
+        var packed = script.substringBetween("}('", ".split('|')")
+        if (packed.isNotEmpty()) {
+            packed = packed.substringBeforeLast("',", packed) + "'," // Reattach delimiter if needed, or better, just use regex/substring on raw string
+        }
+        
+        // Actually, let's just use string operations on the original string inside SubstringExtractor
+        var rawPacked = script.rawString
+        var extracted = rawPacked.substringAfter("}('", "")
+        if (extracted.contains(".split('|'),0,{}))")) {
+            extracted = extracted.substringBefore(".split('|'),0,{}))")
+        } else if (extracted.contains(".split('|'),0,{})")) {
+            extracted = extracted.substringBefore(".split('|'),0,{})")
+        } else {
+            extracted = extracted.substringBefore(".split('|')")
+        }
+        
+        val packedStr = extracted.replace("\\'", "\"")
 
-        val parser = SubstringExtractor(packed)
+        val parser = SubstringExtractor(packedStr)
         val data: String
         if (left != null && right != null) {
             data = parser.substringBetween(left, right)

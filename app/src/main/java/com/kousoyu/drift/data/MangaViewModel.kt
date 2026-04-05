@@ -15,6 +15,7 @@ import com.kousoyu.drift.data.local.DriftDatabase
 import com.kousoyu.drift.data.local.MangaEntity
 import com.kousoyu.drift.data.local.toDomainManga
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 
@@ -49,78 +50,65 @@ class MangaViewModel(app: Application) : AndroidViewModel(app) {
     fun loadPopular() {
         viewModelScope.launch {
             val src = currentSource.value
-            // 1. Immediately read from cache if available (Offline-first / Instant load)
             val cacheFile = File(getApplication<Application>().cacheDir, "popular_manga_cache_${src.name}.json")
+
+            // 1. Instantly render from cache (zero wait)
             if (cacheFile.exists()) {
                 runCatching {
-                    val jsonStr = cacheFile.readText()
-                    val array = JSONArray(jsonStr)
-                    val cachedList = mutableListOf<Manga>()
-                    for (i in 0 until array.length()) {
-                        val obj = array.getJSONObject(i)
-                        cachedList.add(
-                            Manga(
-                                title = obj.optString("title", ""),
-                                coverUrl = obj.optString("coverUrl", ""),
-                                detailUrl = obj.optString("detailUrl", ""),
-                                latestChapter = obj.optString("latestChapter", ""),
-                                genre = obj.optString("genre", ""),
-                                author = obj.optString("author", ""),
-                                sourceName = obj.optString("sourceName", src.name)
-                            )
-                        )
-                    }
-                    if (cachedList.isNotEmpty()) {
-                        _popularState.value = MangaListState.Success(cachedList)
-                    }
+                    val cachedList = parseCacheFile(cacheFile, src.name)
+                    if (cachedList.isNotEmpty()) _popularState.value = MangaListState.Success(cachedList)
                 }
             } else {
-                // If no cache, explicitly show loading state
                 _popularState.value = MangaListState.Loading
             }
 
-            // 2. Fetch fresh data from network in background
-            src.getPopularManga().fold(
-                onSuccess = { list -> 
-                    _popularState.value = MangaListState.Success(list)
-                    // Write to cache
-                    withContext(Dispatchers.IO) {
-                        val array = JSONArray()
-                        list.forEach { manga ->
-                            val obj = JSONObject()
-                            obj.put("title", manga.title)
-                            obj.put("coverUrl", manga.coverUrl)
-                            obj.put("detailUrl", manga.detailUrl)
-                            obj.put("latestChapter", manga.latestChapter)
-                            obj.put("genre", manga.genre)
-                            obj.put("author", manga.author)
-                            obj.put("sourceName", manga.sourceName)
-                            array.put(obj)
+            // 2. Fetch via streaming flow: update UI as each source responds
+            val aggregate = src as? AggregateSource
+            if (aggregate != null) {
+                aggregate.getPopularMangaFlow()
+                    .catch { /* silent — we already have cache */ }
+                    .collect { list ->
+                        if (list.isNotEmpty()) {
+                            _popularState.value = MangaListState.Success(list)
+                            writeCacheFile(cacheFile, list)
                         }
-                        cacheFile.writeText(array.toString())
                     }
-                },
-                onFailure = { 
-                    // Only show error screen if we don't even have cached data
-                    if (_popularState.value !is MangaListState.Success) {
-                        _popularState.value = MangaListState.Error(it.message ?: "未知错误") 
+            } else {
+                // Non-aggregate source: single blocking call
+                src.getPopularManga().fold(
+                    onSuccess = { list ->
+                        _popularState.value = MangaListState.Success(list)
+                        writeCacheFile(cacheFile, list)
+                    },
+                    onFailure = {
+                        if (_popularState.value !is MangaListState.Success) {
+                            _popularState.value = MangaListState.Error(it.message ?: "未知错误")
+                        }
                     }
-                }
-            )
+                )
+            }
         }
     }
 
     fun search(query: String) {
-        if (query.isBlank()) {
-            _searchState.value = null
-            return
-        }
+        if (query.isBlank()) { _searchState.value = null; return }
         _searchState.value = MangaListState.Loading
         viewModelScope.launch {
-            SourceManager.currentSource.value.searchManga(query).fold(
-                onSuccess = { _searchState.value = MangaListState.Success(it) },
-                onFailure = { _searchState.value = MangaListState.Error(it.message ?: "搜索失败") }
-            )
+            val src = SourceManager.currentSource.value
+            val aggregate = src as? AggregateSource
+            if (aggregate != null) {
+                aggregate.searchMangaFlow(query)
+                    .catch { _searchState.value = MangaListState.Error(it.message ?: "搜索失败") }
+                    .collect { list ->
+                        _searchState.value = if (list.isEmpty()) MangaListState.Loading
+                                             else MangaListState.Success(list)
+                    }
+            } else {
+                src.searchManga(query).fold(
+                    onSuccess = { _searchState.value = MangaListState.Success(it) },
+                    onFailure = { _searchState.value = MangaListState.Error(it.message ?: "搜索失败") }
+                )
+            }
         }
     }
 
@@ -134,5 +122,43 @@ class MangaViewModel(app: Application) : AndroidViewModel(app) {
         _searchState.value = null
         _popularState.value = MangaListState.Loading
         loadPopular()
+    }
+
+    // ─── Cache helpers ────────────────────────────────────────────────────────
+
+    private fun parseCacheFile(file: java.io.File, sourceName: String): List<Manga> {
+        val array = JSONArray(file.readText())
+        return (0 until array.length()).map { i ->
+            val o = array.getJSONObject(i)
+            Manga(
+                title          = o.optString("title"),
+                coverUrl       = o.optString("coverUrl"),
+                detailUrl      = o.optString("detailUrl"),
+                latestChapter  = o.optString("latestChapter"),
+                genre          = o.optString("genre"),
+                author         = o.optString("author"),
+                sourceName     = o.optString("sourceName", sourceName)
+            )
+        }
+    }
+
+    private suspend fun writeCacheFile(file: java.io.File, list: List<Manga>) {
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val array = JSONArray()
+                list.forEach { m ->
+                    array.put(JSONObject().apply {
+                        put("title",         m.title)
+                        put("coverUrl",      m.coverUrl)
+                        put("detailUrl",     m.detailUrl)
+                        put("latestChapter", m.latestChapter)
+                        put("genre",         m.genre)
+                        put("author",        m.author)
+                        put("sourceName",    m.sourceName)
+                    })
+                }
+                file.writeText(array.toString())
+            }
+        }
     }
 }

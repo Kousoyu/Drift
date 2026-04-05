@@ -4,49 +4,59 @@ import org.jsoup.nodes.Element
 
 /**
  * The Rule Evaluator engine.
- * Takes a CSS selector with a custom extractor suffix (e.g. "@text", "@src")
- * and applies it to a JSoup Element.
+ * Takes a CSS selector with a custom extractor suffix and applies it to a Jsoup Element.
+ *
+ * Supported extractor suffixes:
+ *   "@text"           → element.text()
+ *   "@html"           → element.html()
+ *   "@<attr>"         → element.attr(attr)
+ *   "@regex:PATTERN"  → Regex(PATTERN).find(outerHtml())?.groupValues?.get(1)
+ *
+ * If the selector part is empty (e.g. "@href"), operates on the element itself.
  */
 object RuleEvaluator {
 
     /**
      * Extracts a string from [element] using the given [rule].
-     * Example rules:
-     * - "h1@text" -> finds "h1" and calls element.text()
-     * - "img.cover@data-src" -> finds "img.cover" and gets the "data-src" attribute
-     * - "@href" -> gets the "href" attribute from the current element itself
-     * If rule is empty, returns empty string.
+     * Examples:
+     *   "h1@text"              → text of the h1
+     *   "img.cover@data-src"   → data-src attribute of img.cover
+     *   "@href"                → href of the current element
+     *   "@regex:(\\d+)"        → first capture group matched in outer HTML
      */
     fun getString(element: Element, rule: String?): String {
         if (rule.isNullOrBlank()) return ""
 
-        val parts = rule.split("@")
-        val selector = parts[0].trim()
-        val extractor = if (parts.size > 1) parts[1].trim() else "text"
+        // ── @regex extractor ────────────────────────────────────────────────
+        if (rule.startsWith("@regex:")) {
+            val pattern = rule.removePrefix("@regex:").trim()
+            return try {
+                Regex(pattern).find(element.outerHtml())?.groupValues?.getOrElse(1) { "" }?.trim() ?: ""
+            } catch (_: Exception) { "" }
+        }
 
-        // If selector is empty, it means we operate on the current element (e.g. "@src")
+        val atIdx = rule.lastIndexOf('@')
+        val selector  = if (atIdx > 0) rule.substring(0, atIdx).trim() else rule.trim()
+        val extractor = if (atIdx >= 0) rule.substring(atIdx + 1).trim() else "text"
+
         val targetElement = if (selector.isEmpty()) element else element.selectFirst(selector)
-        
-        if (targetElement == null) return ""
+            ?: return ""
 
-        val rawStr = when (extractor) {
+        return when (extractor) {
             "text" -> targetElement.text()
             "html" -> targetElement.html()
-            else -> targetElement.attr(extractor)
-        }
-        
-        return rawStr.trim()
+            else   -> targetElement.attr(extractor)
+        }.trim()
     }
 
     /**
-     * Extracts a list of strings using the given [rule].
+     * Extracts a list of strings from [element] using the given selectors.
      */
     fun getStringList(element: Element, listSelector: String, itemRule: String): List<String> {
         if (listSelector.isBlank()) return emptyList()
-        val elements = element.select(listSelector)
-        return elements.mapNotNull {
-            val str = getString(it, itemRule)
-            str.ifEmpty { null }
+        return element.select(listSelector).mapNotNull {
+            getString(it, itemRule).ifEmpty { null }
         }
     }
 }
+

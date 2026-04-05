@@ -24,23 +24,42 @@ class DynamicMangaSource(
 
     // ─── HTTP Utility ─────────────────────────────────────────────────────────
 
+    private val defaultHeaders = mapOf(
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        "Referer"    to config.baseUrl
+    ) + config.headers  // JSON-defined headers override defaults
+
+    /** Candidate base URLs: primary first, then mirrors */
+    private val candidates = listOf(config.baseUrl) + config.mirrorUrls
+
+    /**
+     * Fetches [url] with mirror fallback.
+     * If the primary base URL fails, transparently retries each mirror in order.
+     */
     private fun fetch(url: String): String {
-        val request = Request.Builder()
-            .url(url)
-            .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-            .header("Referer", baseUrl)
-            .get()
-            .build()
-        val response = client.newCall(request).execute()
-        if (!response.isSuccessful) error("HTTP ${response.code} @ $url")
-        return response.body!!.string()
+        var lastError: Throwable = IllegalStateException("No candidates")
+        for (base in candidates) {
+            val resolvedUrl = if (url.startsWith("http")) url
+                             else "${base.removeSuffix("/")}/${url.removePrefix("/")}"
+            try {
+                val reqBuilder = Request.Builder().url(resolvedUrl).get()
+                defaultHeaders.forEach { (k, v) -> reqBuilder.header(k, v) }
+                val response = client.newCall(reqBuilder.build()).execute()
+                if (response.isSuccessful) return response.body!!.string()
+                lastError = IllegalStateException("HTTP ${response.code} @ $resolvedUrl")
+            } catch (e: Exception) {
+                lastError = e
+            }
+        }
+        throw lastError
     }
 
-    private fun ensureAbsoluteUrl(extractedPath: String): String {
+    private fun ensureAbsoluteUrl(extractedPath: String, imageBase: String? = null): String {
         if (extractedPath.isEmpty()) return ""
         if (extractedPath.startsWith("http")) return extractedPath
         if (extractedPath.startsWith("//")) return "https:$extractedPath"
-        return "${baseUrl.removeSuffix("/")}/${extractedPath.removePrefix("/")}"
+        val base = imageBase ?: config.baseUrl
+        return "${base.removeSuffix("/")}/${extractedPath.removePrefix("/")}"
     }
 
     // ─── Popular ─────────────────────────────────────────────────────────────
@@ -127,56 +146,52 @@ class DynamicMangaSource(
     override suspend fun getMangaDetail(detailUrl: String): Result<MangaDetail> =
         withContext(Dispatchers.IO) {
             runCatching {
+                val r = config.detailRule
+
+                // If the rule specifies a separate chapter-list URL, fetch it separately
+                val chaptersFetchUrl = r.chapterListUrl
+                    ?.replace("{detailUrl}", detailUrl)
+                    ?: detailUrl
+
                 val payload = fetch(detailUrl)
                 val trimmed = payload.trimStart()
-                val r = config.detailRule
-                
+
                 if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
                     val root = org.json.JSONObject(trimmed)
-                    val title = JsonRuleEvaluator.getString(root, r.titleSelector.removePrefix("@json:")).ifEmpty { "未知标题" }
-                    val cover = ensureAbsoluteUrl(JsonRuleEvaluator.getString(root, r.coverSelector.removePrefix("@json:")))
+                    val title  = JsonRuleEvaluator.getString(root, r.titleSelector.removePrefix("@json:")).ifEmpty { "未知标题" }
+                    val cover  = ensureAbsoluteUrl(JsonRuleEvaluator.getString(root, r.coverSelector.removePrefix("@json:")))
                     val author = JsonRuleEvaluator.getString(root, r.authorSelector.removePrefix("@json:"))
-                    val desc = JsonRuleEvaluator.getString(root, r.descSelector.removePrefix("@json:")).ifEmpty { "暂无简介" }
+                    val desc   = JsonRuleEvaluator.getString(root, r.descSelector.removePrefix("@json:")).ifEmpty { "暂无简介" }
                     val status = JsonRuleEvaluator.getString(root, r.statusSelector.removePrefix("@json:")).ifEmpty { "未知" }
-                    
-                    val chapterNodes = JsonRuleEvaluator.getList(trimmed, r.chapterListSelector.removePrefix("@json:"))
+
+                    val chapPayload = if (chaptersFetchUrl != detailUrl) fetch(chaptersFetchUrl) else trimmed
+                    val chapterNodes = JsonRuleEvaluator.getList(chapPayload, r.chapterListSelector.removePrefix("@json:"))
                     val chapters = chapterNodes.mapNotNull { node ->
-                        val url = JsonRuleEvaluator.getString(node, r.chapterUrlSelector.removePrefix("@json:"))
+                        val url  = JsonRuleEvaluator.getString(node, r.chapterUrlSelector.removePrefix("@json:"))
                         val name = JsonRuleEvaluator.getString(node, r.chapterNameSelector.removePrefix("@json:"))
-                        if (url.isNotEmpty() && name.isNotEmpty()) {
-                            MangaChapter(name, ensureAbsoluteUrl(url))
-                        } else null
+                        if (url.isNotEmpty() && name.isNotEmpty()) MangaChapter(name, ensureAbsoluteUrl(url)) else null
                     }.distinctBy { it.url }.reversed()
-                    
+
                     return@runCatching MangaDetail(detailUrl, title, cover, author, desc, status, chapters)
                 }
 
                 val doc = Jsoup.parse(payload)
-
-                val title = RuleEvaluator.getString(doc, r.titleSelector).ifEmpty { "未知标题" }
-                val cover = ensureAbsoluteUrl(RuleEvaluator.getString(doc, r.coverSelector))
+                val title  = RuleEvaluator.getString(doc, r.titleSelector).ifEmpty { "未知标题" }
+                val cover  = ensureAbsoluteUrl(RuleEvaluator.getString(doc, r.coverSelector))
                 val author = RuleEvaluator.getString(doc, r.authorSelector)
-                val desc = RuleEvaluator.getString(doc, r.descSelector).ifEmpty { "暂无简介" }
+                val desc   = RuleEvaluator.getString(doc, r.descSelector).ifEmpty { "暂无简介" }
                 val status = RuleEvaluator.getString(doc, r.statusSelector).ifEmpty { "未知" }
 
-                val chapterNodes = doc.select(r.chapterListSelector)
-                val chapters = chapterNodes.mapNotNull { node ->
-                    val url = RuleEvaluator.getString(node, r.chapterUrlSelector)
+                // Possibly fetch chapters from a separate page
+                val chapDoc = if (chaptersFetchUrl != detailUrl) Jsoup.parse(fetch(chaptersFetchUrl)) else doc
+                val chapters = chapDoc.select(r.chapterListSelector).mapNotNull { node ->
+                    val url  = RuleEvaluator.getString(node, r.chapterUrlSelector)
                     val name = RuleEvaluator.getString(node, r.chapterNameSelector)
-                    if (url.isNotEmpty() && name.isNotEmpty()) {
-                        MangaChapter(name, ensureAbsoluteUrl(url))
-                    } else null
-                }.distinctBy { it.url }.reversed() // typical sites list newest first, so we reverse for read order
+                    if (url.isNotEmpty() && name.isNotEmpty()) MangaChapter(name, ensureAbsoluteUrl(url)) else null
+                }.distinctBy { it.url }.reversed()
 
-                MangaDetail(
-                    url = detailUrl,
-                    title = title,
-                    coverUrl = cover,
-                    author = author,
-                    description = desc,
-                    status = status,
-                    chapters = chapters
-                )
+                MangaDetail(url = detailUrl, title = title, coverUrl = cover,
+                    author = author, description = desc, status = status, chapters = chapters)
             }
         }
 
@@ -188,20 +203,26 @@ class DynamicMangaSource(
                 val payload = fetch(chapterUrl)
                 val trimmed = payload.trimStart()
                 val r = config.chapterImagesRule
-                
+
                 val imgs = if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-                     JsonRuleEvaluator.getStringList(trimmed, r.imageListSelector.removePrefix("@json:"), r.imageUrlSelector.removePrefix("@json:"))
+                    JsonRuleEvaluator.getStringList(
+                        trimmed,
+                        r.imageListSelector.removePrefix("@json:"),
+                        r.imageUrlSelector.removePrefix("@json:")
+                    )
                 } else {
-                     val doc = Jsoup.parse(payload)
-                     RuleEvaluator.getStringList(doc, r.imageListSelector, r.imageUrlSelector)
+                    val doc = Jsoup.parse(payload)
+                    RuleEvaluator.getStringList(doc, r.imageListSelector, r.imageUrlSelector)
                 }
-                
-                val absoluteImgs = imgs.map { ensureAbsoluteUrl(it) }
+
+                val absoluteImgs = imgs.map { ensureAbsoluteUrl(it, r.imageBaseUrl) }
 
                 if (absoluteImgs.isEmpty()) {
-                    error("$name: 未解析到任何图片。也许网站结构已变更，请更新规则定义。")
+                    error("$name: 未解析到任何图片。也许网站结构已变更，请更新规则或检查 imageBaseUrl。")
                 }
                 absoluteImgs
             }
         }
+
+    override fun getHeaders(): Map<String, String> = defaultHeaders
 }

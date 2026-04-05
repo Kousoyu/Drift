@@ -6,6 +6,7 @@ package com.kousoyu.drift.utils
  * Note that all methods move [startIndex] over the ending delimiter.
  */
 class SubstringExtractor(private val text: String) {
+    val rawString: String = text
     private var startIndex = 0
 
     fun skipOver(str: String) {

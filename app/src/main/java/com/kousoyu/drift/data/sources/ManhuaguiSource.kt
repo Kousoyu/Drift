@@ -159,7 +159,7 @@ class ManhuaguiSource(private val client: OkHttpClient) : MangaSource {
                 str.replace(packedContentRegex) { match ->
                     val lzs = match.groupValues[1]
                     val decoded = LZString.decompressFromBase64(lzs)
-                    "'\$decoded'.split('|')"
+                    "'$decoded'.split('|')"
                 }
             }
             
@@ -170,17 +170,20 @@ class ManhuaguiSource(private val client: OkHttpClient) : MangaSource {
             val imgJsonStr = imgJsonStrMatch.groupValues[0]
             val jsonObj = JSONObject(imgJsonStr)
             
+            if (!jsonObj.has("files")) {
+                return@withContext Result.failure(Exception("No value for files in JSON: ${imgJsonStr.take(150)}..."))
+            }
             val files = jsonObj.getJSONArray("files")
             val path = jsonObj.getString("path")
-            val sl = jsonObj.getJSONObject("sl")
-            val sl_e = sl.getString("e")
-            val sl_m = sl.getString("m")
+            val sl = jsonObj.optJSONObject("sl")
+            val sl_e = sl?.optString("e") ?: ""
+            val sl_m = sl?.optString("m") ?: ""
             
             val urls = mutableListOf<String>()
             for (i in 0 until files.length()) {
-                val fileStr = files.getString(i)
-                val imgUrl = "\${imageServer[0]}\$path\$fileStr?e=\$sl_e&m=\$sl_m"
-                urls.add(imgUrl)
+                val file = files.getString(i)
+                val url = "${imageServer[0]}$path$file?e=$sl_e&m=$sl_m"
+                urls.add(url)
             }
             
             Result.success(urls)
