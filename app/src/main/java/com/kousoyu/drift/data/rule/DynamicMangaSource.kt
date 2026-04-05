@@ -200,29 +200,59 @@ class DynamicMangaSource(
     override suspend fun getChapterImages(chapterUrl: String): Result<List<String>> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val payload = fetch(chapterUrl)
-                val trimmed = payload.trimStart()
                 val r = config.chapterImagesRule
+                val allImgs = mutableListOf<String>()
+                var currentUrl = chapterUrl
+                val visitedUrls = mutableSetOf<String>()
 
-                val imgs = if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-                    JsonRuleEvaluator.getStringList(
-                        trimmed,
-                        r.imageListSelector.removePrefix("@json:"),
-                        r.imageUrlSelector.removePrefix("@json:")
-                    )
-                } else {
-                    val doc = Jsoup.parse(payload)
-                    RuleEvaluator.getStringList(doc, r.imageListSelector, r.imageUrlSelector)
-                }
+                do {
+                    if (!visitedUrls.add(currentUrl)) break  // cycle guard
+                    val payload = fetch(currentUrl)
+                    val trimmed = payload.trimStart()
 
-                val absoluteImgs = imgs.map { ensureAbsoluteUrl(it, r.imageBaseUrl) }
+                    val pageImgs = if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+                        JsonRuleEvaluator.getStringList(
+                            trimmed,
+                            r.imageListSelector.removePrefix("@json:"),
+                            r.imageUrlSelector.removePrefix("@json:")
+                        )
+                    } else {
+                        val doc = Jsoup.parse(payload)
+                        // Store the base URL of the actual page (after redirects) for relative URL resolution
+                        val pageBase = r.imageBaseUrl
 
-                if (absoluteImgs.isEmpty()) {
+                        val imgs = RuleEvaluator.getStringList(doc, r.imageListSelector, r.imageUrlSelector)
+
+                        // If nextPageSelector is defined, follow pagination
+                        if (r.nextPageSelector != null) {
+                            val nextLink = doc.selectFirst(r.nextPageSelector)
+                            val nextHref = nextLink?.attr("abs:href")
+                                ?: nextLink?.attr("href")?.let { ensureAbsoluteUrl(it) }
+                                ?: ""
+                            // Move to next page if not the same URL and not empty
+                            currentUrl = if (nextHref.isNotEmpty() && nextHref != currentUrl
+                                             && !visitedUrls.contains(nextHref)) {
+                                nextHref
+                            } else {
+                                ""  // signal: no more pages
+                            }
+                        } else {
+                            currentUrl = ""  // no pagination configured
+                        }
+                        imgs
+                    }
+
+                    allImgs += pageImgs.map { ensureAbsoluteUrl(it, r.imageBaseUrl) }
+
+                } while (currentUrl.isNotEmpty())
+
+                if (allImgs.isEmpty()) {
                     error("$name: 未解析到任何图片。也许网站结构已变更，请更新规则或检查 imageBaseUrl。")
                 }
-                absoluteImgs
+                allImgs.distinct()
             }
         }
+
 
     override fun getHeaders(): Map<String, String> = defaultHeaders
 }

@@ -70,6 +70,13 @@ data class ChapterImagesRule(
     val imageListSelector: String,
     val imageUrlSelector: String,
     /** Base URL prepended to relative image paths (overrides source baseUrl). */
-    val imageBaseUrl: String? = null
+    val imageBaseUrl: String? = null,
+    /**
+     * CSS selector for the "next page" link within a paginated chapter reader.
+     * When present, the engine follows next-page links and collects images from ALL sub-pages.
+     * The link text is used to detect end-of-chapter (stops when href matches current or is empty).
+     * Example: "a#next-chapter" or "a[href*='_2.html']"
+     */
+    val nextPageSelector: String? = null
 )
 

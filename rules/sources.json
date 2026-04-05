@@ -1,30 +1,31 @@
 [
   {
     "name": "包子漫画",
-    "baseUrl": "https://www.baozimh.org",
-    "mirrorUrls": ["https://www.baozimh.com", "https://baozimh.com"],
+    "baseUrl": "https://www.baozimh.com",
+    "mirrorUrls": ["https://www.baozimh.org", "https://baozimh.com", "https://www.zerobyw.com"],
     "enabled": true,
     "searchRule": {
       "popularFormat": "/",
       "urlFormat": "/s?q={query}",
-      "listSelector": "a[href*='/manga/']",
-      "titleSelector": "h3@text",
+      "listSelector": ".pure-u-1-2.pure-u-md-1-4",
+      "titleSelector": ".comics-card__title@text",
       "coverSelector": "img@src",
-      "urlSelector": "@href"
+      "urlSelector": "a@href"
     },
     "detailRule": {
-      "titleSelector": "h1@text",
-      "coverSelector": "img@src",
-      "authorSelector": "h2@text",
-      "descSelector": "p@text",
-      "statusSelector": "span@text",
-      "chapterListSelector": "a[href*='/manga/'][href*='-']",
-      "chapterNameSelector": "@text",
+      "titleSelector": "h1.comics-detail__title@text",
+      "coverSelector": ".comics-detail__main img@src",
+      "authorSelector": "h2.comics-detail__author@text",
+      "descSelector": "p.comics-detail__desc@text",
+      "statusSelector": ".comics-detail__info span@text",
+      "chapterListSelector": "a.comics-chapters__item",
+      "chapterNameSelector": "span@text",
       "chapterUrlSelector": "@href"
     },
     "chapterImagesRule": {
-      "imageListSelector": "amp-img, img",
-      "imageUrlSelector": "@src"
+      "imageListSelector": "amp-img[src], .comic-contain img[src]",
+      "imageUrlSelector": "@src",
+      "nextPageSelector": "a#next-chapter"
     }
   },
   {
