@@ -30,38 +30,12 @@ object OtaManager {
     // ─── Built-in fallback ────────────────────────────────────────────────────
     // Used when: (1) first launch with no network, or (2) GitHub fetch fails.
     // Keep this in sync with a known-working snapshot of the remote JSON.
+    //
+    // NOTE: Sources that already have native plugins (e.g. 包子漫画, 拷贝漫画)
+    // do NOT need entries here — they are registered by SourceManager directly.
+    // Only OTA-exclusive sources belong in this fallback.
     private val FALLBACK_JSON = """
 [
-  {
-    "name": "包子漫画",
-    "baseUrl": "https://www.baozimh.com",
-    "mirrorUrls": ["https://www.baozimh.org", "https://baozimh.com", "https://www.zerobyw.com"],
-    "enabled": true,
-    "headers": { "Referer": "https://www.baozimh.com/" },
-    "searchRule": {
-      "popularFormat": "/",
-      "urlFormat": "/search?q={query}",
-      "listSelector": ".comics-card",
-      "titleSelector": "h3@text",
-      "coverSelector": "amp-img@src",
-      "urlSelector": "a.comics-card__poster@href"
-    },
-    "detailRule": {
-      "titleSelector": "h1.comics-detail__title@text",
-      "coverSelector": ".de-info__box amp-img@src",
-      "authorSelector": "h2.comics-detail__author@text",
-      "descSelector": "p.comics-detail__desc@text",
-      "statusSelector": ".comics-detail__info span@text",
-      "chapterListSelector": "a.comics-chapters__item",
-      "chapterNameSelector": "span@text",
-      "chapterUrlSelector": "@href"
-    },
-    "chapterImagesRule": {
-      "imageListSelector": "amp-img[src], .comic-contain img[src]",
-      "imageUrlSelector": "@src",
-      "nextPageSelector": "a#next-chapter"
-    }
-  },
   {
     "name": "漫画库",
     "baseUrl": "https://www.manhuaku.com",

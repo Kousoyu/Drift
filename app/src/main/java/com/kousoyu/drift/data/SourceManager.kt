@@ -14,9 +14,10 @@ object SourceManager {
         .readTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
         .build()
 
-    // ── Native plugins (hardcoded because they need custom algorithm logic) ───
-    // ManhuaguiSource : LZString + JS unpacking for chapter images
-    // CopyMangaSource : AES-CBC decryption with live-scraped key (self-healing)
+    // ── Native plugins (hardcoded — they use custom algorithms or scraping) ───
+    // ManhuaguiSource   : LZString + JS unpacking for chapter images
+    // CopyMangaSource   : JSON API + AES-CBC decryption (self-healing key)
+    // BaoziNativeSource  : HTML scraping with mirror fallback + CDN images
     private val manhuaguiSource = ManhuaguiSource(client)
     private val copyMangaSource = CopyMangaSource(client)
     private val baoziSource     = BaoziNativeSource(client)
