@@ -1,0 +1,34 @@
+package com.kousoyu.drift.data.local;
+
+import androidx.room.Dao;
+import androidx.room.Delete;
+import androidx.room.Insert;
+import androidx.room.OnConflictStrategy;
+import androidx.room.Query;
+
+import kotlinx.coroutines.flow.Flow;
+import java.util.List;
+
+@Dao
+public interface MangaDao {
+    @Query("SELECT * FROM manga_bookshelf ORDER BY addedAt DESC")
+    Flow<List<MangaEntity>> getAllFavorites();
+
+    @Query("SELECT * FROM manga_bookshelf WHERE detailUrl = :url LIMIT 1")
+    MangaEntity getMangaByUrlSync(String url);
+
+    @Query("SELECT * FROM manga_bookshelf WHERE detailUrl = :url LIMIT 1")
+    Flow<MangaEntity> getMangaByUrlFlow(String url);
+
+    @Query("SELECT EXISTS(SELECT * FROM manga_bookshelf WHERE detailUrl = :url)")
+    Flow<Boolean> isFavorite(String url);
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    void insertMangaSync(MangaEntity manga);
+
+    @Query("UPDATE manga_bookshelf SET lastReadChapterName = :chapterName, lastReadChapterUrl = :chapterUrl WHERE detailUrl = :mangaUrl")
+    void updateReadingProgressSync(String mangaUrl, String chapterName, String chapterUrl);
+
+    @Delete
+    void deleteMangaSync(MangaEntity manga);
+}

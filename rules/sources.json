@@ -1,0 +1,58 @@
+[
+  {
+    "name": "包子漫画",
+    "baseUrl": "https://www.baozimh.com",
+    "searchRule": {
+        "popularFormat": "/",
+        "urlFormat": "/search?type=all&q={query}",
+        "listSelector": "div.comics-card",
+        "titleSelector": "h3@text",
+        "coverSelector": "amp-img@src",
+        "urlSelector": "a.comics-card__poster@href"
+    },
+    "detailRule": {
+        "titleSelector": "h1.comics-detail__title@text",
+        "coverSelector": "amp-img@src",
+        "authorSelector": "h2.comics-detail__author@text",
+        "descSelector": "p.comics-detail__desc@text",
+        "statusSelector": "div.tag-list span.tag@text",
+        "chapterListSelector": "div.comics-chapters a",
+        "chapterNameSelector": "span@text",
+        "chapterUrlSelector": "@href"
+    },
+    "chapterImagesRule": {
+        "imageListSelector": "amp-img.comic-contain__item, img.comic-contain__item",
+        "imageUrlSelector": "@src"
+    }
+  },
+  {
+    "name": "拷贝漫画",
+    "baseUrl": "https://www.mangacopy.com",
+    "searchRule": {
+        "popularFormat": "https://api.mangacopy.com/api/v3/ranks?limit=15",
+        "urlFormat": "https://api.mangacopy.com/api/v3/search/comic?platform=3&limit=15&offset=0&q={query}",
+        "listSelector": "@json:results.list",
+        "titleSelector": "@json:comic.name",
+        "coverSelector": "@json:comic.cover",
+        "urlSelector": "@json:comic.path_word",
+        "detailUrlPrefix": "/comic/",
+        "detailUrlSuffix": "/",
+        "latestChapterSelector": "@json:comic.last_chapter_name",
+        "authorSelector": "@json:comic.author[0].name"
+    },
+    "detailRule": {
+        "titleSelector": "h6.comicParticulars-title-right",
+        "coverSelector": "div.comicParticulars-left-img img@data-src",
+        "authorSelector": "span.comicParticulars-tag-title a",
+        "descSelector": "p.intro-all",
+        "statusSelector": "span.comicParticulars-title-right-tag",
+        "chapterListSelector": "div.chapterSon a",
+        "chapterNameSelector": "text",
+        "chapterUrlSelector": "@href"
+    },
+    "chapterImagesRule": {
+        "imageListSelector": "img.comic-image",
+        "imageUrlSelector": "@data-src"
+    }
+  }
+]
