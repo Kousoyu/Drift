@@ -30,6 +30,7 @@ import coil.request.ImageRequest
 import com.kousoyu.drift.data.Manga
 import com.kousoyu.drift.data.MangaListState
 import com.kousoyu.drift.data.MangaViewModel
+import com.kousoyu.drift.data.SourceManager
 import com.kousoyu.drift.ui.theme.DriftTheme
 
 // ─── Category data ────────────────────────────────────────────────────────────
@@ -238,6 +239,10 @@ fun ExploreCard(manga: Manga, onNavigateToDetail: (String, String) -> Unit) {
             model = ImageRequest.Builder(context)
                 .data(manga.coverUrl)
                 .crossfade(true)
+                .apply {
+                    val headers = SourceManager.getSourceByName(manga.sourceName).getHeaders()
+                    headers.forEach { (k, v) -> addHeader(k, v) }
+                }
                 .build(),
             contentDescription = manga.title,
             contentScale = ContentScale.Crop,

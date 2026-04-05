@@ -35,6 +35,7 @@ import coil.request.ImageRequest
 import com.kousoyu.drift.data.DetailState
 import com.kousoyu.drift.data.DetailViewModel
 import com.kousoyu.drift.data.MangaDetail
+import com.kousoyu.drift.data.SourceManager
 import com.kousoyu.drift.ui.theme.shimmerEffect
 import java.net.URLEncoder
 
@@ -47,6 +48,14 @@ fun DetailScreen(
     onChapterClick: (String, String) -> Unit,
     viewModel: DetailViewModel = viewModel()
 ) {
+    val decodedSourceName = remember(sourceNameEncoded) {
+        if (sourceNameEncoded.isNotEmpty()) java.net.URLDecoder.decode(sourceNameEncoded, "UTF-8") else ""
+    }
+    val coverHeaders = remember(decodedSourceName) {
+        if (decodedSourceName.isNotEmpty()) SourceManager.getSourceByName(decodedSourceName).getHeaders()
+        else SourceManager.currentSource.value.getHeaders()
+    }
+
     LaunchedEffect(urlEncoded, sourceNameEncoded) {
         viewModel.loadDetail(urlEncoded, sourceNameEncoded)
     }
@@ -104,6 +113,7 @@ fun DetailScreen(
                         detail = state.detail,
                         localManga = localManga,
                         onChapterClick = onChapterClick,
+                        coverHeaders = coverHeaders,
                         modifier = Modifier.fillMaxSize() // Full bleed, no top padding
                     )
                 }
@@ -117,6 +127,7 @@ fun DetailContent(
     detail: MangaDetail,
     localManga: com.kousoyu.drift.data.local.MangaEntity?,
     onChapterClick: (String, String) -> Unit,
+    coverHeaders: Map<String, String> = emptyMap(),
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -134,7 +145,7 @@ fun DetailContent(
         ) {
             // Blurred Background
             AsyncImage(
-                model = ImageRequest.Builder(context).data(detail.coverUrl).crossfade(true).build(),
+                model = ImageRequest.Builder(context).data(detail.coverUrl).crossfade(true).apply { coverHeaders.forEach { (k, v) -> addHeader(k, v) } }.build(),
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier
@@ -154,7 +165,7 @@ fun DetailContent(
                     .padding(top = 40.dp) // Leave space for TopAppBar
             ) {
                 AsyncImage(
-                    model = ImageRequest.Builder(context).data(detail.coverUrl).crossfade(true).build(),
+                    model = ImageRequest.Builder(context).data(detail.coverUrl).crossfade(true).apply { coverHeaders.forEach { (k, v) -> addHeader(k, v) } }.build(),
                     contentDescription = detail.title,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier

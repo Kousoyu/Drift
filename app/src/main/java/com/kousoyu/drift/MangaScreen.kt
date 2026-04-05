@@ -859,6 +859,10 @@ fun RealHorizontalList(
                         model = ImageRequest.Builder(context)
                             .data(manga.coverUrl)
                             .crossfade(300)
+                            .apply {
+                                val headers = SourceManager.getSourceByName(manga.sourceName).getHeaders()
+                                headers.forEach { (k, v) -> addHeader(k, v) }
+                            }
                             .build(),
                         contentDescription = manga.title,
                         contentScale = ContentScale.Crop,
@@ -920,6 +924,10 @@ fun RealMangaCard(manga: Manga, modifier: Modifier = Modifier) {
                 model = ImageRequest.Builder(context)
                     .data(manga.coverUrl)
                     .crossfade(300)
+                    .apply {
+                        val headers = SourceManager.getSourceByName(manga.sourceName).getHeaders()
+                        headers.forEach { (k, v) -> addHeader(k, v) }
+                    }
                     .build(),
                 contentDescription = manga.title,
                 contentScale = ContentScale.Crop,
@@ -984,6 +992,10 @@ fun RealBookGrid(
                             model = ImageRequest.Builder(context)
                                 .data(manga.coverUrl)
                                 .crossfade(300)
+                                .apply {
+                                    val headers = SourceManager.getSourceByName(manga.sourceName).getHeaders()
+                                    headers.forEach { (k, v) -> addHeader(k, v) }
+                                }
                                 .build(),
                             contentDescription = manga.title,
                             contentScale = ContentScale.Crop,

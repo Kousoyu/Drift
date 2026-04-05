@@ -48,7 +48,7 @@ object OtaManager {
     },
     "detailRule": {
       "titleSelector": "h1.comics-detail__title@text",
-      "coverSelector": ".comics-detail__main amp-img@src",
+      "coverSelector": ".de-info__box amp-img@src",
       "authorSelector": "h2.comics-detail__author@text",
       "descSelector": "p.comics-detail__desc@text",
       "statusSelector": ".comics-detail__info span@text",
