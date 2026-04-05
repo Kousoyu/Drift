@@ -1,11 +1,15 @@
 package com.kousoyu.drift.data.sources
 
+import android.util.Log
 import com.kousoyu.drift.data.Manga
 import com.kousoyu.drift.data.MangaChapter
 import com.kousoyu.drift.data.MangaDetail
 import com.kousoyu.drift.data.MangaSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.Cookie
+import okhttp3.CookieJar
+import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
@@ -182,15 +186,20 @@ class CopyMangaSource(private val client: OkHttpClient = buildClient()) : MangaS
                 path       = "/comic/$slug/chapter/$uuid"
             )
 
+            Log.d("CopyManga", "Chapter HTML length: ${chapHtml.length}, starts with: ${chapHtml.take(300)}")
+
             // ── Step 2: Extract AES key ────────────────────────────────────────
-            // Pattern: var {anyName} = '{exactly 16 printable chars}';
-            // Variable name rotates (ccz, cct, dio, …) → we match ANY name.
-            val aesKey = Regex("""var\s+\w+\s*=\s*'(.{16})'""")
+            // Variable name rotates (cct, ccz, dio, …) — match ANY var with exactly 16 chars.
+            // Site uses single quotes: var cct = 'op0zzpvv.nmn.o0p';
+            val aesKey = Regex("""var\s+\w+\s*=\s*['"](.{16})['"]""")
                 .findAll(chapHtml)
                 .map { it.groupValues[1] }
-                // Pick the one closest to "contentKey" in the source (most likely the cipher key)
                 .firstOrNull()
-                ?: error("AES key not found in chapter HTML — site may have changed obfuscation")
+                .also { Log.d("CopyManga", "AES key found: $it") }
+                ?: run {
+                    Log.e("CopyManga", "KEY MISS. HTML snippet: ${chapHtml.take(2000)}")
+                    error("AES key not found in chapter HTML — site may have changed obfuscation")
+                }
 
             // ── Step 3: Extract contentKey payload ────────────────────────────
             val contentKey = Regex("""var\s+contentKey\s*=\s*'([^']+)'""")
@@ -256,9 +265,21 @@ class CopyMangaSource(private val client: OkHttpClient = buildClient()) : MangaS
     }
 
     companion object {
+        private const val TAG = "CopyManga"
+
         fun buildClient(): OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(12, TimeUnit.SECONDS)
-            .readTimeout(15, TimeUnit.SECONDS)
+            .readTimeout(20, TimeUnit.SECONDS)
+            // In-memory cookie jar: lets us share session cookies across requests
+            // (some chapter pages require the session cookie set on the domain root)
+            .cookieJar(object : CookieJar {
+                private val store = mutableMapOf<String, MutableList<Cookie>>()
+                override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
+                    store.getOrPut(url.host) { mutableListOf() }.addAll(cookies)
+                }
+                override fun loadForRequest(url: HttpUrl): List<Cookie> =
+                    store[url.host] ?: emptyList()
+            })
             .build()
     }
 }
