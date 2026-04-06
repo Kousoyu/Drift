@@ -16,8 +16,8 @@ import java.util.concurrent.TimeUnit
 object SourceManager {
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(8, TimeUnit.SECONDS)
-        .readTimeout(20, TimeUnit.SECONDS)
+        .connectTimeout(5, TimeUnit.SECONDS)
+        .readTimeout(12, TimeUnit.SECONDS)
         .build()
 
     // ── Native plugins ──────────────────────────────────────────────────────

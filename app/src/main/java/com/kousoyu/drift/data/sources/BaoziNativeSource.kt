@@ -24,8 +24,8 @@ class BaoziNativeSource(client: OkHttpClient) : MangaSource {
 
     private val http = HttpEngine(
         client  = client,
-        mirrors = listOf("https://www.webmota.com", "https://cn.baozimh.com",
-                         "https://www.baozimh.com", "https://cn.bzmgcn.com"),
+        mirrors = listOf("https://cn.webmota.com", "https://www.webmota.com",
+                         "https://www.baozimh.com"),
         headers = mapOf(
             "User-Agent" to UA,
             "Referer"    to "https://www.baozimh.com/"
