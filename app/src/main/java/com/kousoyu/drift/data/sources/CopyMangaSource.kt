@@ -286,14 +286,28 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
 
     /** Fetch chapter data, trying chapter2 first then legacy endpoint. */
     private fun fetchChapter(slug: String, uuid: String): String {
-        return try {
+        // Try chapter2 first
+        try {
             Log.d(TAG, "Trying chapter2: /comic/$slug/chapter2/$uuid")
             val result = api.fetch("/comic/$slug/chapter2/$uuid")
             Log.d(TAG, "chapter2 OK, length=${result.length}")
-            result
+            // Dump full response for diagnosis (small enough)
+            Log.d(TAG, "chapter2 FULL RESPONSE: $result")
+            return result
         } catch (e: Exception) {
-            Log.w(TAG, "chapter2 failed: ${e.message}, falling back to chapter")
-            api.fetch("/comic/$slug/chapter/$uuid")
+            Log.w(TAG, "chapter2 failed: ${e.message}")
+        }
+
+        // Try legacy chapter
+        try {
+            Log.d(TAG, "Trying chapter: /comic/$slug/chapter/$uuid")
+            val result = api.fetch("/comic/$slug/chapter/$uuid")
+            Log.d(TAG, "chapter OK, length=${result.length}")
+            Log.d(TAG, "chapter FULL RESPONSE: $result")
+            return result
+        } catch (e: Exception) {
+            Log.e(TAG, "chapter also failed: ${e.message}")
+            throw e
         }
     }
 
