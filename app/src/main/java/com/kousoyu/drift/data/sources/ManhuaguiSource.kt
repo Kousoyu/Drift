@@ -1,5 +1,6 @@
 package com.kousoyu.drift.data.sources
 
+import com.kousoyu.drift.data.HttpEngine
 import com.kousoyu.drift.data.Manga
 import com.kousoyu.drift.data.MangaChapter
 import com.kousoyu.drift.data.MangaDetail
@@ -9,186 +10,147 @@ import com.kousoyu.drift.utils.Unpacker
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
-import okhttp3.Request
 import org.json.JSONObject
 import org.jsoup.Jsoup
-import java.io.IOException
 
-class ManhuaguiSource(private val client: OkHttpClient) : MangaSource {
-    override val name: String = "漫画柜 (Native)"
-    override val baseUrl: String = "https://tw.manhuagui.com"
-    private val imageServer = arrayOf("https://i.hamreus.com", "https://cf.hamreus.com")
+/**
+ * ManhuaGui (漫画柜) — HTML + LZString/JS unpacking for chapter images.
+ *
+ * Image URLs are encrypted in a packed JS block inside the chapter page.
+ * The block is decompressed via LZString, then unpacked to extract JSON
+ * containing file paths and CDN tokens.
+ */
+class ManhuaguiSource(client: OkHttpClient) : MangaSource {
 
-    override fun getHeaders(): Map<String, String> {
-        return mapOf(
-            "Referer" to baseUrl,
+    override val name    = "漫画柜 (Native)"
+    override val baseUrl = "https://tw.manhuagui.com"
+
+    private val http = HttpEngine(
+        client  = client,
+        mirrors = listOf("https://tw.manhuagui.com", "https://www.manhuagui.com"),
+        headers = mapOf(
+            "Referer"    to "https://tw.manhuagui.com",
             "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
-    }
+    )
 
-    private fun getRequest(url: String): Request {
-        val builder = okhttp3.Headers.Builder()
-        getHeaders().forEach { builder.add(it.key, it.value) }
-        return Request.Builder().url(url).headers(builder.build()).build()
-    }
+    private val imageServer = "https://i.hamreus.com"
+
+    override fun getHeaders(): Map<String, String> = mapOf(
+        "Referer"    to baseUrl,
+        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    )
+
+    // ─── Popular / Search ────────────────────────────────────────────────────
 
     override suspend fun getPopularManga(): Result<List<Manga>> = withContext(Dispatchers.IO) {
-        try {
-            val response = client.newCall(getRequest("$baseUrl/list/view_p1.html")).execute()
-            if (!response.isSuccessful) return@withContext Result.failure(Exception("HTTP \${response.code}"))
-            
-            val doc = Jsoup.parse(response.body?.string() ?: "")
-            val items = doc.select("ul#contList > li")
-            val mangas = items.mapNotNull { item ->
-                val a = item.select("a.bcover").first() ?: return@mapNotNull null
-                val title = a.attr("title").trim()
-                val url = a.attr("href")
-                
-                val img = a.select("img").first()
-                val coverUrl = if (img?.hasAttr("src") == true) img.attr("abs:src") else img?.attr("abs:data-src") ?: ""
-                
+        runCatching {
+            val doc = Jsoup.parse(http.fetch("/list/view_p1.html"))
+            doc.select("ul#contList > li").mapNotNull { item ->
+                val a = item.selectFirst("a.bcover") ?: return@mapNotNull null
+                val img = a.selectFirst("img")
                 Manga(
-                    title = title,
-                    coverUrl = coverUrl,
-                    detailUrl = url,
+                    title    = a.attr("title").trim(),
+                    coverUrl = img?.let { if (it.hasAttr("src")) it.attr("abs:src") else it.attr("abs:data-src") } ?: "",
+                    detailUrl  = a.attr("href"),
                     sourceName = name
                 )
             }
-            Result.success(mangas)
-        } catch (e: Exception) {
-            Result.failure(e)
         }
     }
 
     override suspend fun searchManga(query: String): Result<List<Manga>> = withContext(Dispatchers.IO) {
-        try {
-            val response = client.newCall(getRequest("$baseUrl/s/\${query}_p1.html")).execute()
-            if (!response.isSuccessful) return@withContext Result.failure(Exception("HTTP \${response.code}"))
-            
-            val doc = Jsoup.parse(response.body?.string() ?: "")
-            val items = doc.select("div.book-result > ul > li")
-            val mangas = items.mapNotNull { item ->
-                val detail = item.select("div.book-detail").first() ?: return@mapNotNull null
-                val a = detail.select("dl > dt > a").first() ?: return@mapNotNull null
-                val title = a.attr("title").trim()
-                val url = a.attr("href")
-                val coverUrl = item.select("div.book-cover > a.bcover > img").first()?.attr("abs:src") ?: ""
-                
+        runCatching {
+            val doc = Jsoup.parse(http.fetch("/s/${query}_p1.html"))
+            doc.select("div.book-result > ul > li").mapNotNull { item ->
+                val detail = item.selectFirst("div.book-detail") ?: return@mapNotNull null
+                val a = detail.selectFirst("dl > dt > a") ?: return@mapNotNull null
                 Manga(
-                    title = title,
-                    coverUrl = coverUrl,
-                    detailUrl = url,
+                    title      = a.attr("title").trim(),
+                    coverUrl   = item.selectFirst("div.book-cover > a.bcover > img")?.attr("abs:src") ?: "",
+                    detailUrl  = a.attr("href"),
                     sourceName = name
                 )
             }
-            Result.success(mangas)
-        } catch (e: Exception) {
-            Result.failure(e)
         }
     }
 
+    // ─── Detail ──────────────────────────────────────────────────────────────
+
     override suspend fun getMangaDetail(detailUrl: String): Result<MangaDetail> = withContext(Dispatchers.IO) {
-        try {
+        runCatching {
             val fullUrl = if (detailUrl.startsWith("http")) detailUrl else "$baseUrl$detailUrl"
-            val response = client.newCall(getRequest(fullUrl)).execute()
-            if (!response.isSuccessful) return@withContext Result.failure(Exception("HTTP \${response.code}"))
-            
-            val doc = Jsoup.parse(response.body?.string() ?: "", fullUrl)
-            val title = doc.select("div.book-title > h1:nth-child(1)").text().trim()
-            val coverUrl = doc.select("p.hcover > img").attr("abs:src")
-            val author = doc.select("span:contains(漫画作者) > a , span:contains(漫畫作者) > a").text().trim().replace(" ", ", ")
-            val description = doc.select("div#intro-all").text().trim()
-            val statusStr = doc.select("div.book-detail > ul.detail-list > li.status > span > span").first()?.text() ?: ""
-            
-            // Decrypt R18 hidden chapters if needed
-            val hiddenEncryptedChapterList = doc.select("#__VIEWSTATE").first()
-            if (hiddenEncryptedChapterList != null) {
-                val decodedHiddenChapterList = LZString.decompressFromBase64(hiddenEncryptedChapterList.`val`())
-                if (decodedHiddenChapterList != null) {
-                    val hiddenChapterList = Jsoup.parse(decodedHiddenChapterList, fullUrl)
-                    doc.select("#erroraudit_show").first()?.replaceWith(hiddenChapterList)
+            val doc = Jsoup.parse(http.fetch(fullUrl), fullUrl)
+
+            // Decrypt hidden (R18) chapters if present
+            doc.selectFirst("#__VIEWSTATE")?.`val`()?.let { encoded ->
+                LZString.decompressFromBase64(encoded)?.let { decoded ->
+                    doc.selectFirst("#erroraudit_show")?.replaceWith(Jsoup.parse(decoded, fullUrl))
                 }
             }
 
             val chapters = mutableListOf<MangaChapter>()
-            val sectionList = doc.select("[id^=chapter-list-]")
-            sectionList.forEach { section ->
-                val pageList = section.select("ul")
-                pageList.reverse()
-                pageList.forEach { page ->
-                    val chapterList = page.select("li > a.status0")
-                    chapterList.forEach {
-                        val cUrl = it.attr("href")
-                        val cName = it.attr("title").trim().ifEmpty { it.select("span").first()?.ownText() ?: "" }
-                        chapters.add(MangaChapter(cName, cUrl))
+            doc.select("[id^=chapter-list-]").forEach { section ->
+                val pages = section.select("ul").apply { reverse() }
+                pages.forEach { page ->
+                    page.select("li > a.status0").forEach { a ->
+                        chapters.add(MangaChapter(
+                            name = a.attr("title").trim().ifEmpty { a.selectFirst("span")?.ownText() ?: "" },
+                            url  = a.attr("href")
+                        ))
                     }
                 }
             }
-            
-            val detail = MangaDetail(
-                url = fullUrl,
-                title = title,
-                coverUrl = coverUrl,
-                author = author,
-                description = description,
-                status = statusStr,
-                chapters = chapters
+
+            MangaDetail(
+                url         = fullUrl,
+                title       = doc.select("div.book-title > h1:nth-child(1)").text().trim(),
+                coverUrl    = doc.select("p.hcover > img").attr("abs:src"),
+                author      = doc.select("span:contains(漫画作者) > a, span:contains(漫畫作者) > a")
+                                 .text().trim().replace(" ", ", "),
+                description = doc.select("div#intro-all").text().trim(),
+                status      = doc.selectFirst("div.book-detail > ul.detail-list > li.status > span > span")?.text() ?: "",
+                chapters    = chapters
             )
-            Result.success(detail)
-        } catch (e: Exception) {
-            Result.failure(e)
         }
     }
 
-    private val packedRegex = Regex("""window\[".*?"\](\(.*\)\s*\{[\s\S]+\}\s*\(.*\))""")
-    private val packedContentRegex = Regex("""['"]([0-9A-Za-z+/=]+)['"]\[['"].*?['"]]\(['"].*?['"]\)""")
-    private val singleQuoteRegex = Regex("""\\'""")
-    private val blockCcArgRegex = Regex("""\{.*\}""")
+    // ─── Chapter Images ──────────────────────────────────────────────────────
 
     override suspend fun getChapterImages(chapterUrl: String): Result<List<String>> = withContext(Dispatchers.IO) {
-        try {
+        runCatching {
             val fullUrl = if (chapterUrl.startsWith("http")) chapterUrl else "$baseUrl$chapterUrl"
-            val response = client.newCall(getRequest(fullUrl)).execute()
-            if (!response.isSuccessful) return@withContext Result.failure(Exception("HTTP \${response.code}"))
-            
-            val html = response.body?.string() ?: ""
-            val packedMatch = packedRegex.find(html)
-                ?: return@withContext Result.failure(Exception("Cannot find packed JS code"))
-                
-            val imgCode = packedMatch.groupValues[1].let { str ->
-                str.replace(packedContentRegex) { match ->
-                    val lzs = match.groupValues[1]
-                    val decoded = LZString.decompressFromBase64(lzs)
-                    "'$decoded'.split('|')"
-                }
+            val html = http.fetch(fullUrl)
+
+            val packed = PACKED_RE.find(html)?.groupValues?.get(1)
+                ?: error("Cannot find packed JS code")
+
+            val imgCode = packed.replace(PACKED_CONTENT_RE) { match ->
+                val decoded = LZString.decompressFromBase64(match.groupValues[1])
+                "'$decoded'.split('|')"
             }
-            
-            val imgDecode = Unpacker.unpack(singleQuoteRegex.replace(imgCode, "-"))
-            val imgJsonStrMatch = blockCcArgRegex.find(imgDecode)
-                ?: return@withContext Result.failure(Exception("Cannot find decoded JSON arguments"))
-                
-            val imgJsonStr = imgJsonStrMatch.groupValues[0]
-            val jsonObj = JSONObject(imgJsonStr)
-            
-            if (!jsonObj.has("files")) {
-                return@withContext Result.failure(Exception("No value for files in JSON: ${imgJsonStr.take(150)}..."))
+
+            val unpacked = Unpacker.unpack(imgCode.replace("\\'", "-"))
+            val jsonStr  = BLOCK_RE.find(unpacked)?.groupValues?.get(0)
+                ?: error("Cannot find decoded JSON arguments")
+
+            val json = JSONObject(jsonStr)
+            if (!json.has("files")) error("No 'files' in JSON: ${jsonStr.take(150)}...")
+
+            val files = json.getJSONArray("files")
+            val path  = json.getString("path")
+            val slE   = json.optJSONObject("sl")?.optString("e") ?: ""
+            val slM   = json.optJSONObject("sl")?.optString("m") ?: ""
+
+            (0 until files.length()).map { i ->
+                "$imageServer$path${files.getString(i)}?e=$slE&m=$slM"
             }
-            val files = jsonObj.getJSONArray("files")
-            val path = jsonObj.getString("path")
-            val sl = jsonObj.optJSONObject("sl")
-            val sl_e = sl?.optString("e") ?: ""
-            val sl_m = sl?.optString("m") ?: ""
-            
-            val urls = mutableListOf<String>()
-            for (i in 0 until files.length()) {
-                val file = files.getString(i)
-                val url = "${imageServer[0]}$path$file?e=$sl_e&m=$sl_m"
-                urls.add(url)
-            }
-            
-            Result.success(urls)
-        } catch (e: Exception) {
-            Result.failure(e)
         }
+    }
+
+    companion object {
+        private val PACKED_RE         = Regex("""window\[".*?"]\((\(.*\)\s*\{[\s\S]+\}\s*\(.*\))""")
+        private val PACKED_CONTENT_RE = Regex("""['"]([0-9A-Za-z+/=]+)['"]\\[['"].*?['"]]\(['"].*?['"]\)""")
+        private val BLOCK_RE          = Regex("""\{.*\}""")
     }
 }

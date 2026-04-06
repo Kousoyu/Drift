@@ -60,9 +60,7 @@ class MainActivity : ComponentActivity() {
             )
             val themeMode by themeViewModel.themeMode.collectAsState()
 
-            LaunchedEffect(Unit) {
-                com.kousoyu.drift.data.SourceManager.initialize(this@MainActivity)
-            }
+
 
             if (themeMode == ThemeMode.UNINITIALIZED) return@setContent
 
