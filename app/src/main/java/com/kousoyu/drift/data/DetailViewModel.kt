@@ -30,11 +30,18 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
     private val _localManga = MutableStateFlow<MangaEntity?>(null)
     val localManga: StateFlow<MangaEntity?> = _localManga
 
+    // Cache: avoid re-fetching when navigating back from reader
+    private var cachedUrl: String? = null
+
     fun loadDetail(urlEncoded: String, sourceNameEncoded: String = "") {
+        val url = URLDecoder.decode(urlEncoded, "UTF-8")
+
+        // If we already have this detail loaded, skip the fetch
+        if (url == cachedUrl && state is DetailState.Success) return
+
         viewModelScope.launch {
             state = DetailState.Loading
             try {
-                val url = URLDecoder.decode(urlEncoded, "UTF-8")
                 val explicitSourceName = if (sourceNameEncoded.isNotEmpty()) URLDecoder.decode(sourceNameEncoded, "UTF-8") else ""
 
                 // Track local DB entity (favorite status & reading progress)
@@ -54,6 +61,7 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
 
                 targetSource.getMangaDetail(url)
                     .onSuccess { detail ->
+                        cachedUrl = url
                         state = DetailState.Success(detail)
                         syncChapterCount(url, detail)
                     }

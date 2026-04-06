@@ -112,9 +112,12 @@ fun DetailScreen(
                     DetailContent(
                         detail = state.detail,
                         localManga = localManga,
-                        onChapterClick = onChapterClick,
+                        onChapterClick = { url, name ->
+                            com.kousoyu.drift.data.ChapterNavigation.chapters = state.detail.chapters
+                            onChapterClick(url, name)
+                        },
                         coverHeaders = coverHeaders,
-                        modifier = Modifier.fillMaxSize() // Full bleed, no top padding
+                        modifier = Modifier.fillMaxSize()
                     )
                 }
             }

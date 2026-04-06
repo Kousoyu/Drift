@@ -26,6 +26,14 @@ sealed class ReaderState {
     data class Error(val message: String) : ReaderState()
 }
 
+/**
+ * Shared chapter list passed from DetailScreen to ReaderScreen.
+ * Navigation routes can't carry large lists, so we use this lightweight singleton.
+ */
+object ChapterNavigation {
+    var chapters: List<MangaChapter> = emptyList()
+}
+
 class ReaderViewModel(app: Application) : AndroidViewModel(app) {
     private val dao = DriftDatabase.getDatabase(app).mangaDao()
 
@@ -38,6 +46,9 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
     private var mangaUrl: String = ""
     private var sourceName: String = ""
 
+    // Chapter image cache: avoid re-fetching same chapter
+    private val imageCache = mutableMapOf<String, Pair<List<String>, Map<String, String>>>()
+
     // Debounced page saving
     private var pageSaveJob: Job? = null
 
@@ -45,8 +56,7 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
         urlEncoded: String,
         mangaUrlEncoded: String = "",
         chapterNameEncoded: String = "",
-        sourceNameEncoded: String = "",
-        chapterList: List<MangaChapter> = emptyList()
+        sourceNameEncoded: String = ""
     ) {
         viewModelScope.launch {
             state = ReaderState.Loading
@@ -57,8 +67,10 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
                 if (mangaUrlEncoded.isNotEmpty()) mangaUrl = URLDecoder.decode(mangaUrlEncoded, "UTF-8")
                 if (explicitSource.isNotEmpty()) sourceName = explicitSource
 
-                // Store chapter list for navigation
-                if (chapterList.isNotEmpty()) chapters = chapterList
+                // Pick up chapter list from shared navigation store
+                if (chapters.isEmpty()) {
+                    chapters = ChapterNavigation.chapters
+                }
                 currentChapterIndex = chapters.indexOfFirst { it.url == url }.takeIf { it >= 0 }
                     ?: chapters.indexOfFirst { url.endsWith(it.url) }.takeIf { it >= 0 }
                     ?: -1
@@ -71,7 +83,23 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
 
-                // Resolve source (ALL DB access on IO thread)
+                // Check image cache first
+                val cached = imageCache[url]
+                if (cached != null) {
+                    val savedPage = withContext(Dispatchers.IO) {
+                        if (mangaUrl.isNotEmpty()) dao.getMangaByUrlSync(mangaUrl)?.lastReadPage ?: 0 else 0
+                    }
+                    state = ReaderState.Success(
+                        images = cached.first,
+                        headers = cached.second,
+                        chapters = chapters,
+                        currentIndex = currentChapterIndex,
+                        initialPage = savedPage
+                    )
+                    return@launch
+                }
+
+                // Resolve source (DB access on IO thread)
                 val targetSource = withContext(Dispatchers.IO) {
                     when {
                         explicitSource.isNotEmpty() -> SourceManager.getSourceByName(explicitSource)
@@ -88,9 +116,16 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
 
                 targetSource.getChapterImages(url)
                     .onSuccess { images ->
+                        val headers = targetSource.getHeaders()
+                        // Cache for instant re-entry
+                        imageCache[url] = images to headers
+                        // Keep cache bounded (max 5 chapters)
+                        if (imageCache.size > 5) {
+                            imageCache.keys.first().let { imageCache.remove(it) }
+                        }
                         state = ReaderState.Success(
                             images = images,
-                            headers = targetSource.getHeaders(),
+                            headers = headers,
                             chapters = chapters,
                             currentIndex = currentChapterIndex,
                             initialPage = savedPage
@@ -120,8 +155,7 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
             urlEncoded = java.net.URLEncoder.encode(ch.url, "UTF-8"),
             mangaUrlEncoded = java.net.URLEncoder.encode(mangaUrl, "UTF-8"),
             chapterNameEncoded = java.net.URLEncoder.encode(ch.name, "UTF-8"),
-            sourceNameEncoded = java.net.URLEncoder.encode(sourceName, "UTF-8"),
-            chapterList = chapters
+            sourceNameEncoded = java.net.URLEncoder.encode(sourceName, "UTF-8")
         )
     }
 
