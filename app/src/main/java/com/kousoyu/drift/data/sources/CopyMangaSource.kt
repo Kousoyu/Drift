@@ -91,22 +91,54 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
                 .add("salt", System.currentTimeMillis().toString())
                 .build()
 
-            val req = Request.Builder()
-                .url("https://api.mangacopy.com/api/v3/login")
-                .post(body)
-                .apply { apiHeaders.forEach { (k, v) -> header(k, v) } }
+            // Use a no-redirect client to prevent POST->301->GET->HTML
+            val noRedirectClient = client.newBuilder()
+                .followRedirects(false)
+                .followSslRedirects(false)
                 .build()
 
-            val res = client.newCall(req).execute()
-            val json = JSONObject(res.body!!.string())
-            val code = json.optInt("code")
+            val loginMirrors = listOf(
+                "https://api.mangacopy.com/api/v3/login",
+                "https://api.2026copy.com/api/v3/login"
+            )
 
-            if (code != 200) error(json.optString("message", "登录失败 (code=$code)"))
+            var lastError: Exception = Exception("No login mirrors")
+            for (loginUrl in loginMirrors) {
+                try {
+                    val req = Request.Builder()
+                        .url(loginUrl)
+                        .post(body)
+                        .apply { apiHeaders.forEach { (k, v) -> header(k, v) } }
+                        .build()
 
-            val token = json.getJSONObject("results").getString("token")
-            saveToken(token)
-            Log.i("CopyManga", "Login successful, token cached")
-            token
+                    val res = noRedirectClient.newCall(req).execute()
+                    val rawBody = res.body?.string() ?: ""
+                    Log.d(TAG, "Login $loginUrl -> ${res.code}, body_start=${rawBody.take(80)}")
+
+                    // Skip if not JSON
+                    if (rawBody.isBlank() || rawBody.trimStart().startsWith("<")) {
+                        Log.w(TAG, "Login returned HTML/empty from $loginUrl (HTTP ${res.code})")
+                        continue
+                    }
+
+                    val json = JSONObject(rawBody)
+                    val code = json.optInt("code")
+
+                    if (code == 200) {
+                        val token = json.getJSONObject("results").getString("token")
+                        saveToken(token)
+                        Log.i(TAG, "Login SUCCESS via $loginUrl")
+                        return@runCatching token
+                    } else {
+                        Log.w(TAG, "Login code=$code from $loginUrl: ${json.optString("message")}")
+                        lastError = Exception("Login code=$code: ${json.optString("message")}")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Login attempt failed for $loginUrl: ${e.message}")
+                    lastError = e
+                }
+            }
+            throw lastError
         }
     }
 
