@@ -32,30 +32,33 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
 
     private val prefs: SharedPreferences? = context?.getSharedPreferences("copymanga_auth", Context.MODE_PRIVATE)
 
-    private val apiHeaders: Map<String, String>
+    /** Base headers for all requests — NO auth token. */
+    private val baseHeaders = mapOf(
+        "User-Agent" to UA,
+        "Referer"    to "$baseUrl/",
+        "platform"   to "1",
+        "region"     to "1",
+        "version"    to "2.2.0",
+        "webp"       to "1"
+    )
+
+    /** Extra headers with auth token — only for chapter image requests. */
+    private val authHeaders: Map<String, String>
         get() {
-            val base = mutableMapOf(
-                "User-Agent" to UA,
-                "Referer"    to "$baseUrl/",
-                "platform"   to "1",
-                "region"     to "1",
-                "version"    to "2.2.0",
-                "webp"       to "1"
-            )
-            // Inject auth token in Authorization header
             val token = getToken()
-            if (token.isNotEmpty()) {
-                base["authorization"] = "Token $token"
-            }
-            return base
+            if (token.isEmpty()) return emptyMap()
+            return mapOf(
+                "authorization" to "Token $token",
+                "Cookie"        to "token=$token"
+            )
         }
 
-    /** API engine — tries primary then mirror. */
+    /** API engine — listing, detail, search (NO auth). */
     private val api: HttpEngine
         get() = HttpEngine(
             client  = client,
             mirrors = listOf("https://api.mangacopy.com/api/v3", "https://api.copy20.com/api/v3"),
-            headers = apiHeaders
+            headers = baseHeaders
         )
 
     /** Web engine — for scraping pass JS when needed. */
@@ -63,7 +66,7 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
         get() = HttpEngine(
             client  = client,
             mirrors = listOf("https://www.mangacopy.com", "https://copymanga.site", "https://copymanga.org"),
-            headers = apiHeaders
+            headers = baseHeaders
         )
 
     private val s3Base = "https://s3.mangafunb.fun"
@@ -120,7 +123,7 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
                     val req = Request.Builder()
                         .url(loginUrl)
                         .post(body)
-                        .apply { apiHeaders.forEach { (k, v) -> header(k, v) } }
+                        .apply { baseHeaders.forEach { (k, v) -> header(k, v) } }
                         .build()
 
                     val res = noRedirectClient.newCall(req).execute()
@@ -244,7 +247,7 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
             ensureAuthenticated()
 
             Log.d(TAG, "Token after auth: '${getToken().take(10)}...'")
-            Log.d(TAG, "Headers: ${apiHeaders.map { "${it.key}=${it.value.take(30)}" }}")
+            Log.d(TAG, "Auth headers: ${authHeaders.map { "${it.key}=${it.value.take(30)}" }}")
 
             val chapJson = fetchChapter(slug, uuid)
             val json = JSONObject(chapJson)
@@ -290,22 +293,18 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
 
     /** Fetch chapter data. Try chapter2 first, fall back to legacy. */
     private fun fetchChapter(slug: String, uuid: String): String {
-        // Add Cookie header for chapter requests (needed for full content)
-        val chapterExtra = mutableMapOf<String, String>()
-        val token = getToken()
-        if (token.isNotEmpty()) {
-            chapterExtra["Cookie"] = "token=$token"
-        }
+        // Pass auth token as both Authorization header and Cookie
+        val extra = authHeaders
 
         try {
-            Log.d(TAG, "Fetching /comic/$slug/chapter2/$uuid")
-            val result = api.fetch("/comic/$slug/chapter2/$uuid", chapterExtra)
+            Log.d(TAG, "Fetching /comic/$slug/chapter2/$uuid (auth=${extra.isNotEmpty()})")
+            val result = api.fetch("/comic/$slug/chapter2/$uuid", extra)
             Log.d(TAG, "chapter2 OK, length=${result.length}")
             return result
         } catch (e: Exception) {
             Log.w(TAG, "chapter2 failed: ${e.message}, trying legacy")
         }
-        val result = api.fetch("/comic/$slug/chapter/$uuid", chapterExtra)
+        val result = api.fetch("/comic/$slug/chapter/$uuid", extra)
         Log.d(TAG, "chapter(legacy) OK, length=${result.length}")
         return result
     }
@@ -393,7 +392,7 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
         error("No content found in chapter API response")
     }
 
-    override fun getHeaders(): Map<String, String> = apiHeaders
+    override fun getHeaders(): Map<String, String> = baseHeaders
 
     // ─── Pass JS Discovery ──────────────────────────────────────────────────
 
