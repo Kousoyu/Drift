@@ -46,9 +46,6 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
     private var mangaUrl: String = ""
     private var sourceName: String = ""
 
-    // Chapter image cache: avoid re-fetching same chapter
-    private val imageCache = mutableMapOf<String, Pair<List<String>, Map<String, String>>>()
-
     // Debounced page saving
     private var pageSaveJob: Job? = null
 
@@ -68,9 +65,7 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
                 if (explicitSource.isNotEmpty()) sourceName = explicitSource
 
                 // Pick up chapter list from shared navigation store
-                if (chapters.isEmpty()) {
-                    chapters = ChapterNavigation.chapters
-                }
+                if (chapters.isEmpty()) chapters = ChapterNavigation.chapters
                 currentChapterIndex = chapters.indexOfFirst { it.url == url }.takeIf { it >= 0 }
                     ?: chapters.indexOfFirst { url.endsWith(it.url) }.takeIf { it >= 0 }
                     ?: -1
@@ -83,17 +78,15 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
 
-                // Check image cache first
+                // Check static image cache first → instant if already loaded
                 val cached = imageCache[url]
                 if (cached != null) {
                     val savedPage = withContext(Dispatchers.IO) {
                         if (mangaUrl.isNotEmpty()) dao.getMangaByUrlSync(mangaUrl)?.lastReadPage ?: 0 else 0
                     }
                     state = ReaderState.Success(
-                        images = cached.first,
-                        headers = cached.second,
-                        chapters = chapters,
-                        currentIndex = currentChapterIndex,
+                        images = cached.first, headers = cached.second,
+                        chapters = chapters, currentIndex = currentChapterIndex,
                         initialPage = savedPage
                     )
                     return@launch
@@ -109,25 +102,19 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
 
-                // Load initial page from DB
                 val savedPage = withContext(Dispatchers.IO) {
                     if (mangaUrl.isNotEmpty()) dao.getMangaByUrlSync(mangaUrl)?.lastReadPage ?: 0 else 0
                 }
 
                 targetSource.getChapterImages(url)
                     .onSuccess { images ->
-                        val headers = targetSource.getHeaders()
-                        // Cache for instant re-entry
-                        imageCache[url] = images to headers
-                        // Keep cache bounded (max 5 chapters)
-                        if (imageCache.size > 5) {
-                            imageCache.keys.first().let { imageCache.remove(it) }
-                        }
+                        val hdrs = targetSource.getHeaders()
+                        imageCache[url] = images to hdrs
+                        // Keep cache bounded
+                        while (imageCache.size > 5) imageCache.keys.first().let { imageCache.remove(it) }
                         state = ReaderState.Success(
-                            images = images,
-                            headers = headers,
-                            chapters = chapters,
-                            currentIndex = currentChapterIndex,
+                            images = images, headers = hdrs,
+                            chapters = chapters, currentIndex = currentChapterIndex,
                             initialPage = savedPage
                         )
                     }
@@ -143,14 +130,11 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
         val newIndex = currentChapterIndex + delta
         if (newIndex !in chapters.indices) return
         val ch = chapters[newIndex]
-
-        // Reset page to 0 for new chapter
         if (mangaUrl.isNotEmpty()) {
             viewModelScope.launch(Dispatchers.IO) {
                 runCatching { dao.updateReadingPageSync(mangaUrl, 0) }
             }
         }
-
         loadChapter(
             urlEncoded = java.net.URLEncoder.encode(ch.url, "UTF-8"),
             mangaUrlEncoded = java.net.URLEncoder.encode(mangaUrl, "UTF-8"),
@@ -162,7 +146,6 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
     val hasPrevChapter: Boolean get() = currentChapterIndex > 0
     val hasNextChapter: Boolean get() = currentChapterIndex in 0 until chapters.size - 1
 
-    /** Debounced save of scroll position (called on every scroll, saves after 500ms idle). */
     fun onPageChanged(page: Int) {
         if (mangaUrl.isEmpty()) return
         pageSaveJob?.cancel()
@@ -170,5 +153,13 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
             delay(500)
             runCatching { dao.updateReadingPageSync(mangaUrl, page) }
         }
+    }
+
+    companion object {
+        /**
+         * Static image cache — survives ViewModel destruction across navigation.
+         * Max 5 chapters to bound memory usage.
+         */
+        private val imageCache = LinkedHashMap<String, Pair<List<String>, Map<String, String>>>()
     }
 }
