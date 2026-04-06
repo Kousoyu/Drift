@@ -29,6 +29,7 @@ import coil.compose.SubcomposeAsyncImage
 import coil.request.CachePolicy
 import coil.request.ImageRequest
 import coil.imageLoader
+import androidx.compose.ui.draw.clip
 import com.kousoyu.drift.data.ReaderState
 import com.kousoyu.drift.data.ReaderViewModel
 import java.net.URLDecoder
