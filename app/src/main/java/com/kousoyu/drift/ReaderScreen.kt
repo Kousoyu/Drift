@@ -30,6 +30,10 @@ import coil.request.CachePolicy
 import coil.request.ImageRequest
 import coil.imageLoader
 import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.res.painterResource
 import com.kousoyu.drift.data.ReaderState
 import com.kousoyu.drift.data.ReaderViewModel
 import java.net.URLDecoder
@@ -328,50 +332,38 @@ private fun MangaPage(
 
 @Composable
 private fun PageLoadingPlaceholder(pageNumber: Int, totalPages: Int) {
-    // Pulsing shimmer alpha
-    val infiniteTransition = rememberInfiniteTransition(label = "shimmer")
+    val infiniteTransition = rememberInfiniteTransition(label = "pulse")
     val alpha by infiniteTransition.animateFloat(
-        initialValue = 0.04f,
-        targetValue = 0.12f,
+        initialValue = 0.12f, targetValue = 0.35f,
         animationSpec = infiniteRepeatable(
-            animation = tween(900, easing = FastOutSlowInEasing),
+            animation = tween(1200, easing = FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse
-        ),
-        label = "shimmer_alpha"
+        ), label = "pulse_alpha"
     )
 
     Box(
         modifier = Modifier
             .fillMaxWidth()
-            // ← This is the critical fix: guarantee minimum height so the list
-            //   has real pixel space to scroll into before the image loads.
             .heightIn(min = 600.dp)
-            .background(Color(0xFF111111)),
+            .background(Color(0xFF0A0A0A)),
         contentAlignment = Alignment.Center
     ) {
-        // Subtle shimmer strip at the centre
-        Box(
+        Image(
+            painter = painterResource(id = R.drawable.ic_drift_logo),
+            contentDescription = null,
             modifier = Modifier
-                .fillMaxWidth(0.5f)
-                .height(2.dp)
-                .background(Color.White.copy(alpha = alpha))
+                .size(36.dp)
+                .graphicsLayer { this.alpha = alpha },
+            colorFilter = ColorFilter.tint(Color.White)
         )
 
-        // Minimal spinner — lets the user know "still working"
-        CircularProgressIndicator(
-            modifier = Modifier.size(22.dp),
-            strokeWidth = 1.5.dp,
-            color = Color.White.copy(alpha = 0.35f)
-        )
-
-        // Page counter hint in the corner
         Text(
             text = "$pageNumber / $totalPages",
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(12.dp),
             fontSize = 11.sp,
-            color = Color.White.copy(alpha = 0.2f),
+            color = Color.White.copy(alpha = 0.15f),
             fontWeight = FontWeight.Light
         )
     }
@@ -385,28 +377,23 @@ private fun PageErrorPlaceholder(pageNumber: Int, onRetry: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(min = 320.dp)
-            .background(Color(0xFF111111))
+            .background(Color(0xFF0A0A0A))
             .clickable { onRetry() },
         contentAlignment = Alignment.Center
     ) {
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                Icons.Filled.Refresh,
-                contentDescription = "重试",
-                tint = Color.White.copy(alpha = 0.3f),
-                modifier = Modifier.size(28.dp)
+            Image(
+                painter = painterResource(id = R.drawable.ic_drift_logo),
+                contentDescription = null,
+                modifier = Modifier.size(28.dp).graphicsLayer { alpha = 0.2f },
+                colorFilter = ColorFilter.tint(Color.White)
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
             Text(
-                text = "第 $pageNumber 页加载失败",
-                fontSize = 12.sp,
-                color = Color.White.copy(alpha = 0.25f)
-            )
-            Spacer(Modifier.height(4.dp))
-            Text(
-                text = "点击重试",
+                text = "第 $pageNumber 页加载失败 · 点击重试",
                 fontSize = 11.sp,
-                color = Color.White.copy(alpha = 0.15f)
+                color = Color.White.copy(alpha = 0.2f),
+                fontWeight = FontWeight.Light
             )
         }
     }
@@ -416,27 +403,35 @@ private fun PageErrorPlaceholder(pageNumber: Int, onRetry: () -> Unit) {
 
 @Composable
 private fun ChapterLoadingSpinner() {
-    val infiniteTransition = rememberInfiniteTransition(label = "dot")
-    val dot by infiniteTransition.animateFloat(
-        initialValue = 0f, targetValue = 3f,
-        animationSpec = infiniteRepeatable(tween(900), RepeatMode.Restart),
-        label = "dot_float"
+    val infiniteTransition = rememberInfiniteTransition(label = "breath")
+
+    val scale by infiniteTransition.animateFloat(
+        initialValue = 0.7f, targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1500, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ), label = "breath_scale"
+    )
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.3f, targetValue = 0.7f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(1500, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ), label = "breath_alpha"
     )
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(24.dp),
-                strokeWidth = 1.5.dp,
-                color = Color.White.copy(alpha = 0.5f)
-            )
-            Spacer(Modifier.height(16.dp))
-            Text(
-                text = "获取章节" + ".".repeat(dot.toInt() + 1),
-                fontSize = 12.sp,
-                color = Color.White.copy(alpha = 0.3f),
-                fontWeight = FontWeight.Light
-            )
-        }
+        Image(
+            painter = painterResource(id = R.drawable.ic_drift_logo),
+            contentDescription = null,
+            modifier = Modifier
+                .size(48.dp)
+                .graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                    this.alpha = alpha
+                },
+            colorFilter = ColorFilter.tint(Color.White)
+        )
     }
 }
