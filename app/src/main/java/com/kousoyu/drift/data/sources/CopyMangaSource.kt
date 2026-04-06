@@ -22,8 +22,15 @@ import javax.crypto.spec.SecretKeySpec
 /**
  * CopyManga (拷贝漫画) — JSON API with self-healing AES decryption.
  *
- * Supports token-based authentication for full chapter access.
- * Without a token, the API limits chapters to 5 pages.
+ * Authentication infrastructure is in place but currently DISABLED for chapter
+ * image requests. The CopyManga API returns code 210 ("pirated app") when auth
+ * headers are present alongside third-party manga readers (e.g. Tachiyomi).
+ *
+ * To re-enable full chapter access in the future:
+ * 1. Ensure user has uninstalled third-party CopyManga extensions
+ * 2. Install official CopyManga app, wait 1 hour for block to lift
+ * 3. Uncomment ensureAuthenticated() in getChapterImages()
+ * 4. Pass authHeaders in fetchChapter()
  */
 class CopyMangaSource(private val client: OkHttpClient, context: Context? = null) : MangaSource {
 
@@ -32,7 +39,7 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
 
     private val prefs: SharedPreferences? = context?.getSharedPreferences("copymanga_auth", Context.MODE_PRIVATE)
 
-    /** Base headers for all requests — NO auth token. */
+    /** Base headers — used for all requests. */
     private val baseHeaders = mapOf(
         "User-Agent" to UA,
         "Referer"    to "$baseUrl/",
@@ -42,7 +49,7 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
         "webp"       to "1"
     )
 
-    /** Extra headers with auth token — only for chapter image requests. */
+    /** Auth headers — for future use when account ban is lifted. */
     private val authHeaders: Map<String, String>
         get() {
             val token = getToken()
@@ -53,7 +60,7 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
             )
         }
 
-    /** API engine — listing, detail, search (NO auth). */
+    /** API engine for all JSON API requests. */
     private val api: HttpEngine
         get() = HttpEngine(
             client  = client,
@@ -61,7 +68,7 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
             headers = baseHeaders
         )
 
-    /** Web engine — for scraping pass JS when needed. */
+    /** Web engine for scraping HTML when needed. */
     private val web: HttpEngine
         get() = HttpEngine(
             client  = client,
@@ -71,7 +78,7 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
 
     private val s3Base = "https://s3.mangafunb.fun"
 
-    // ─── Authentication ─────────────────────────────────────────────────────
+    // ─── Authentication (infrastructure ready, currently disabled) ───────────
 
     private fun getToken(): String {
         return cachedToken
@@ -85,14 +92,11 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
     }
 
     /**
-     * Login to CopyManga and store the token.
-     * Call this once on first use; token persists across app restarts.
+     * Login to CopyManga. Call manually when account ban is lifted.
+     * Uses /api/kb/web/login with Base64("password-salt") encoding.
      */
     suspend fun login(username: String, password: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
-            // CopyManga login protocol:
-            // salt = random 6-digit int
-            // password = Base64("rawPassword-salt")
             val salt = (100000..999999).random()
             val encodedPassword = Base64.encodeToString(
                 "$password-$salt".toByteArray(Charsets.UTF_8),
@@ -105,19 +109,17 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
                 .add("salt", salt.toString())
                 .build()
 
-            // Use a no-redirect client to prevent POST->301->GET->HTML
             val noRedirectClient = client.newBuilder()
                 .followRedirects(false)
                 .followSslRedirects(false)
                 .build()
 
-            // Correct login endpoint: /api/kb/web/login (NOT /api/v3/login)
             val loginMirrors = listOf(
                 "https://api.mangacopy.com/api/kb/web/login",
                 "https://api.2026copy.com/api/kb/web/login"
             )
 
-            var lastError: Exception = Exception("No login mirrors")
+            var lastError: Exception = Exception("All login mirrors failed")
             for (loginUrl in loginMirrors) {
                 try {
                     val req = Request.Builder()
@@ -128,13 +130,8 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
 
                     val res = noRedirectClient.newCall(req).execute()
                     val rawBody = res.body?.string() ?: ""
-                    Log.d(TAG, "Login $loginUrl -> ${res.code}, body_start=${rawBody.take(80)}")
 
-                    // Skip if not JSON
-                    if (rawBody.isBlank() || rawBody.trimStart().startsWith("<")) {
-                        Log.w(TAG, "Login returned HTML/empty from $loginUrl (HTTP ${res.code})")
-                        continue
-                    }
+                    if (rawBody.isBlank() || rawBody.trimStart().startsWith("<")) continue
 
                     val json = JSONObject(rawBody)
                     val code = json.optInt("code")
@@ -145,11 +142,9 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
                         Log.i(TAG, "Login SUCCESS via $loginUrl")
                         return@runCatching token
                     } else {
-                        Log.w(TAG, "Login code=$code from $loginUrl: ${json.optString("message")}")
-                        lastError = Exception("Login code=$code: ${json.optString("message")}")
+                        lastError = Exception("code=$code: ${json.optString("message")}")
                     }
                 } catch (e: Exception) {
-                    Log.w(TAG, "Login attempt failed for $loginUrl: ${e.message}")
                     lastError = e
                 }
             }
@@ -157,10 +152,8 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
         }
     }
 
-    /** Check if we have a stored token. */
     fun isLoggedIn(): Boolean = getToken().isNotEmpty()
 
-    /** Clear stored token. */
     fun logout() {
         cachedToken = null
         prefs?.edit()?.remove("token")?.apply()
@@ -200,9 +193,7 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
     override suspend fun getMangaDetail(detailUrl: String): Result<MangaDetail> = withContext(Dispatchers.IO) {
         runCatching {
             val slug = detailUrl.trimEnd('/').substringAfterLast("/")
-            val detailJson = api.fetch("/comic2/$slug")
-            Log.d(TAG, "Detail response length=${detailJson.length}")
-            val results = JSONObject(detailJson).getJSONObject("results")
+            val results = JSONObject(api.fetch("/comic2/$slug")).getJSONObject("results")
             val comic = results.optJSONObject("comic") ?: results
 
             val chapJson = api.fetch("/comic/$slug/group/default/chapters?limit=500&offset=0")
@@ -240,88 +231,26 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
             val uuid  = parts.last()
             val slug  = parts[parts.size - 3]
 
-            Log.d(TAG, "──── getChapterImages: slug=$slug uuid=$uuid ────")
-            Log.d(TAG, "Token before auth: '${getToken().take(10)}...'")
-
-            // Always ensure we have a valid token before fetching images
-            ensureAuthenticated()
-
-            Log.d(TAG, "Token after auth: '${getToken().take(10)}...'")
-            Log.d(TAG, "Auth headers: ${authHeaders.map { "${it.key}=${it.value.take(30)}" }}")
-
             val chapJson = fetchChapter(slug, uuid)
             val json = JSONObject(chapJson)
             val code = json.optInt("code")
-            Log.d(TAG, "Chapter API response code=$code")
 
             if (code != 200) {
-                val msg = json.optString("message", "unknown")
-                Log.e(TAG, "Chapter fetch failed: code=$code msg=$msg")
-                // Token might be expired — re-login and retry
-                cachedToken = null
-                prefs?.edit()?.remove("token")?.apply()
-                ensureAuthenticated()
-                val retryJson = fetchChapter(slug, uuid)
-                val retryCode = JSONObject(retryJson).optInt("code")
-                Log.d(TAG, "Retry response code=$retryCode")
-                if (retryCode != 200) error("API error after retry: $retryCode - ${JSONObject(retryJson).optString("message")}")
-                return@runCatching parseChapterImages(JSONObject(retryJson), slug, uuid)
+                error("API error: code=$code - ${json.optString("message")}")
             }
 
-            val result = parseChapterImages(json, slug, uuid)
-
-            // Sanity check: if we got fewer images than expected, token may be bad
-            val expectedSize = json.optJSONObject("results")
-                ?.optJSONObject("chapter")?.optInt("size", 0) ?: 0
-            Log.d(TAG, "Got ${result.size} images, expected size=$expectedSize, token='${getToken().take(10)}...'")
-
-            if (expectedSize > 0 && result.size < expectedSize && result.size <= 5) {
-                Log.w(TAG, "TRUNCATED! Got ${result.size}/$expectedSize images — re-authenticating")
-                cachedToken = null
-                prefs?.edit()?.remove("token")?.apply()
-                ensureAuthenticated()
-                Log.d(TAG, "Token after re-auth: '${getToken().take(10)}...'")
-                val retryJson = fetchChapter(slug, uuid)
-                val retryResult = parseChapterImages(JSONObject(retryJson), slug, uuid)
-                Log.d(TAG, "After re-auth: got ${retryResult.size} images")
-                return@runCatching retryResult
-            }
-
-            result
+            parseChapterImages(json, slug, uuid)
         }
     }
 
     /** Fetch chapter data. Try chapter2 first, fall back to legacy. */
     private fun fetchChapter(slug: String, uuid: String): String {
-        // Pass auth token as both Authorization header and Cookie
-        val extra = authHeaders
-
+        // NOTE: Auth headers disabled due to code 210 block.
+        // To re-enable: pass authHeaders as second arg to api.fetch()
         try {
-            Log.d(TAG, "Fetching /comic/$slug/chapter2/$uuid (auth=${extra.isNotEmpty()})")
-            val result = api.fetch("/comic/$slug/chapter2/$uuid", extra)
-            Log.d(TAG, "chapter2 OK, length=${result.length}")
-            return result
-        } catch (e: Exception) {
-            Log.w(TAG, "chapter2 failed: ${e.message}, trying legacy")
-        }
-        val result = api.fetch("/comic/$slug/chapter/$uuid", extra)
-        Log.d(TAG, "chapter(legacy) OK, length=${result.length}")
-        return result
-    }
-
-    /** Ensure we have a valid auth token. Login if needed. */
-    private suspend fun ensureAuthenticated() {
-        if (getToken().isNotEmpty()) {
-            Log.d(TAG, "Already have token: '${getToken().take(10)}...'")
-            return
-        }
-        Log.i(TAG, "No token found, auto-logging in as $DEFAULT_USER...")
-        try {
-            val token = login(DEFAULT_USER, DEFAULT_PASS).getOrThrow()
-            Log.i(TAG, "Login SUCCESS! Token: '${token.take(10)}...'")
-        } catch (e: Exception) {
-            Log.e(TAG, "Login FAILED: ${e.message}", e)
-        }
+            return api.fetch("/comic/$slug/chapter2/$uuid")
+        } catch (_: Exception) { }
+        return api.fetch("/comic/$slug/chapter/$uuid")
     }
 
     private fun parseChapterImages(json: JSONObject, slug: String, uuid: String): List<String> {
@@ -411,9 +340,7 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
                     Regex("""comic_content_pass([\w.]+)\.js""").find(js)?.groupValues?.get(1)?.let { ver ->
                         return "$s3Base/static/websitefree/js20190704/comic_content_pass$ver.js"
                     }
-                } catch (e: Exception) {
-                    Log.w("CopyManga", "bundle scan: ${e.message}")
-                }
+                } catch (_: Exception) { }
             }
         return null
     }
@@ -436,11 +363,10 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
         private const val TAG = "CopyManga"
         private const val UA = "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36"
 
-        // Default credentials for auto-login
+        // Credentials for future auto-login (when ban is lifted)
         private const val DEFAULT_USER = "Kousoyu"
         private const val DEFAULT_PASS = "Xiaomu070904"
 
-        // In-memory token cache
         private var cachedToken: String? = null
     }
 }
