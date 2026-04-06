@@ -190,20 +190,31 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
             val uuid  = parts.last()
             val slug  = parts[parts.size - 3]
 
+            Log.d(TAG, "──── getChapterImages: slug=$slug uuid=$uuid ────")
+            Log.d(TAG, "Token before auth: '${getToken().take(10)}...'")
+
             // Always ensure we have a valid token before fetching images
             ensureAuthenticated()
+
+            Log.d(TAG, "Token after auth: '${getToken().take(10)}...'")
+            Log.d(TAG, "Headers: ${apiHeaders.map { "${it.key}=${it.value.take(30)}" }}")
 
             val chapJson = fetchChapter(slug, uuid)
             val json = JSONObject(chapJson)
             val code = json.optInt("code")
+            Log.d(TAG, "Chapter API response code=$code")
 
             if (code != 200) {
+                val msg = json.optString("message", "unknown")
+                Log.e(TAG, "Chapter fetch failed: code=$code msg=$msg")
                 // Token might be expired — re-login and retry
-                Log.w("CopyManga", "Chapter fetch code=$code, re-authenticating...")
                 cachedToken = null
                 prefs?.edit()?.remove("token")?.apply()
                 ensureAuthenticated()
                 val retryJson = fetchChapter(slug, uuid)
+                val retryCode = JSONObject(retryJson).optInt("code")
+                Log.d(TAG, "Retry response code=$retryCode")
+                if (retryCode != 200) error("API error after retry: $retryCode - ${JSONObject(retryJson).optString("message")}")
                 return@runCatching parseChapterImages(JSONObject(retryJson), slug, uuid)
             }
 
@@ -212,13 +223,18 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
             // Sanity check: if we got fewer images than expected, token may be bad
             val expectedSize = json.optJSONObject("results")
                 ?.optJSONObject("chapter")?.optInt("size", 0) ?: 0
+            Log.d(TAG, "Got ${result.size} images, expected size=$expectedSize, token='${getToken().take(10)}...'")
+
             if (expectedSize > 0 && result.size < expectedSize && result.size <= 5) {
-                Log.w("CopyManga", "Got ${result.size} images but size=$expectedSize, re-auth...")
+                Log.w(TAG, "TRUNCATED! Got ${result.size}/$expectedSize images — re-authenticating")
                 cachedToken = null
                 prefs?.edit()?.remove("token")?.apply()
                 ensureAuthenticated()
+                Log.d(TAG, "Token after re-auth: '${getToken().take(10)}...'")
                 val retryJson = fetchChapter(slug, uuid)
-                return@runCatching parseChapterImages(JSONObject(retryJson), slug, uuid)
+                val retryResult = parseChapterImages(JSONObject(retryJson), slug, uuid)
+                Log.d(TAG, "After re-auth: got ${retryResult.size} images")
+                return@runCatching retryResult
             }
 
             result
@@ -228,20 +244,28 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
     /** Fetch chapter data, trying chapter2 first then legacy endpoint. */
     private fun fetchChapter(slug: String, uuid: String): String {
         return try {
-            api.fetch("/comic/$slug/chapter2/$uuid")
-        } catch (_: Exception) {
+            Log.d(TAG, "Trying chapter2: /comic/$slug/chapter2/$uuid")
+            val result = api.fetch("/comic/$slug/chapter2/$uuid")
+            Log.d(TAG, "chapter2 OK, length=${result.length}")
+            result
+        } catch (e: Exception) {
+            Log.w(TAG, "chapter2 failed: ${e.message}, falling back to chapter")
             api.fetch("/comic/$slug/chapter/$uuid")
         }
     }
 
     /** Ensure we have a valid auth token. Login if needed. */
     private suspend fun ensureAuthenticated() {
-        if (getToken().isNotEmpty()) return
-        Log.i("CopyManga", "No token found, auto-logging in...")
+        if (getToken().isNotEmpty()) {
+            Log.d(TAG, "Already have token: '${getToken().take(10)}...'")
+            return
+        }
+        Log.i(TAG, "No token found, auto-logging in as $DEFAULT_USER...")
         try {
-            login(DEFAULT_USER, DEFAULT_PASS).getOrThrow()
+            val token = login(DEFAULT_USER, DEFAULT_PASS).getOrThrow()
+            Log.i(TAG, "Login SUCCESS! Token: '${token.take(10)}...'")
         } catch (e: Exception) {
-            Log.w("CopyManga", "Auto-login failed: ${e.message}")
+            Log.e(TAG, "Login FAILED: ${e.message}", e)
         }
     }
 
@@ -354,9 +378,10 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
     }
 
     companion object {
+        private const val TAG = "CopyManga"
         private const val UA = "Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Mobile Safari/537.36"
 
-        // Default credentials for auto-login when 210 is returned
+        // Default credentials for auto-login
         private const val DEFAULT_USER = "Kousoyu"
         private const val DEFAULT_PASS = "Xiaomu070904"
 
