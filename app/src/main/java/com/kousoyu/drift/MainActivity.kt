@@ -32,6 +32,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.Coil
 import coil.ImageLoader
 import coil.disk.DiskCache
+import com.kousoyu.drift.data.SourceManager
 
 // ─── Navigation Routes ────────────────────────────────────────────────────────
 object DriftRoutes {
@@ -57,6 +58,9 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // ── Initialize source manager with app context ──
+        SourceManager.init(this)
 
         // ── Coil: 256MB disk cache for instant re-reads ──
         Coil.setImageLoader(

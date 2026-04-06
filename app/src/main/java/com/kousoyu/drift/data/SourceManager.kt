@@ -1,5 +1,6 @@
 package com.kousoyu.drift.data
 
+import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
 import okhttp3.OkHttpClient
 import com.kousoyu.drift.data.sources.ManhuaguiSource
@@ -12,6 +13,8 @@ import java.util.concurrent.TimeUnit
  *
  * Architecture: Pure static. No network calls, no OTA, no dynamic loading.
  * Every source is a hardcoded native plugin — this guarantees stability.
+ *
+ * Call [init] once from Application.onCreate() to provide Context.
  */
 object SourceManager {
 
@@ -20,21 +23,46 @@ object SourceManager {
         .readTimeout(12, TimeUnit.SECONDS)
         .build()
 
-    // ── Native plugins ──────────────────────────────────────────────────────
-    // CopyMangaSource   : JSON API + AES-CBC decryption (self-healing key)
-    // BaoziNativeSource  : HTML scraping with mirror fallback + CDN images
-    // ManhuaguiSource   : LZString + JS unpacking for chapter images
-    private val copyManga  = CopyMangaSource(client)
-    private val baozi      = BaoziNativeSource(client)
-    private val manhuagui  = ManhuaguiSource(client)
+    // Sources are lazily initialized after init() provides the context
+    private lateinit var copyManga: CopyMangaSource
+    private lateinit var baozi: BaoziNativeSource
+    private lateinit var manhuagui: ManhuaguiSource
+    private lateinit var aggregate: AggregateSource
 
-    // ── Aggregate (virtual) ─────────────────────────────────────────────────
-    private val aggregate = AggregateSource()
+    lateinit var sources: List<MangaSource>
+        private set
+    val currentSource = MutableStateFlow<MangaSource>(PlaceholderSource)
 
-    // ── Public ──────────────────────────────────────────────────────────────
-    val sources: List<MangaSource> = listOf(aggregate, copyManga, baozi, manhuagui)
-    val currentSource = MutableStateFlow<MangaSource>(aggregate)
+    private var initialized = false
+
+    /**
+     * Initialize sources with application context.
+     * Must be called once from Application.onCreate() or MainActivity.
+     */
+    fun init(context: Context) {
+        if (initialized) return
+        val appCtx = context.applicationContext
+        copyManga  = CopyMangaSource(client, appCtx)
+        baozi      = BaoziNativeSource(client)
+        manhuagui  = ManhuaguiSource(client)
+        aggregate  = AggregateSource()
+        sources    = listOf(aggregate, copyManga, baozi, manhuagui)
+        currentSource.value = aggregate
+        initialized = true
+    }
 
     fun getSourceByName(name: String): MangaSource =
-        sources.find { it.name == name } ?: aggregate
+        if (initialized) sources.find { it.name == name } ?: aggregate
+        else PlaceholderSource
+
+    /** Placeholder until init() is called. Should never be used in practice. */
+    private object PlaceholderSource : MangaSource {
+        override val name = "加载中..."
+        override val baseUrl = ""
+        override suspend fun getPopularManga() = Result.success(emptyList<Manga>())
+        override suspend fun searchManga(query: String) = Result.success(emptyList<Manga>())
+        override suspend fun getMangaDetail(detailUrl: String) = Result.failure<MangaDetail>(Exception("未初始化"))
+        override suspend fun getChapterImages(chapterUrl: String) = Result.failure<List<String>>(Exception("未初始化"))
+        override fun getHeaders() = emptyMap<String, String>()
+    }
 }
