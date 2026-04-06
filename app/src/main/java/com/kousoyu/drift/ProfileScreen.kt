@@ -7,6 +7,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.SystemUpdate
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,9 +20,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kousoyu.drift.data.AuthState
 import com.kousoyu.drift.data.DriftUser
+import com.kousoyu.drift.data.UpdateManager
 import com.kousoyu.drift.ui.theme.DriftTheme
 import com.kousoyu.drift.ui.theme.ThemeMode
 import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.launch
 
 // ─── Profile Screen ───────────────────────────────────────────────────────────
 
@@ -29,10 +32,13 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 fun ProfileScreen(
     currentTheme: ThemeMode,
     onThemeChange: (ThemeMode) -> Unit,
-    onNavigateToEdit: () -> Unit
+    onNavigateToEdit: () -> Unit,
+    updateManager: UpdateManager? = null
 ) {
     val vm: AuthViewModel = viewModel()
     val authState by vm.authState.collectAsState()
+    val updateState = updateManager?.updateState?.collectAsState()
+    val coroutineScope = rememberCoroutineScope()
 
     var showLogin by remember { mutableStateOf(false) }
 
@@ -143,7 +149,11 @@ fun ProfileScreen(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(text = "Drift 游离", fontSize = 15.sp, color = MaterialTheme.colorScheme.onBackground)
-            Text(text = "v1.0.0-alpha", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                text = "v${updateManager?.getCurrentVersionName() ?: "1.0"}",
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
         Spacer(modifier = Modifier.height(10.dp))
         Text(
@@ -151,6 +161,63 @@ fun ProfileScreen(
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
         )
+
+        // ─── Check Update Button ─────────────────────────────────────────────
+        Spacer(modifier = Modifier.height(16.dp))
+        val currentUpdateState = updateState?.value
+        OutlinedButton(
+            onClick = {
+                coroutineScope.launch {
+                    try { updateManager?.checkUpdate() } catch (_: Exception) { }
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            enabled = currentUpdateState !is UpdateManager.UpdateState.Checking,
+            shape = MaterialTheme.shapes.small
+        ) {
+            when (currentUpdateState) {
+                is UpdateManager.UpdateState.Checking -> {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        strokeWidth = 2.dp
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("检查中...", fontSize = 13.sp)
+                }
+                is UpdateManager.UpdateState.UpToDate -> {
+                    Icon(
+                        Icons.Filled.SystemUpdate,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("已是最新版本 ✓", fontSize = 13.sp)
+                }
+                is UpdateManager.UpdateState.Error -> {
+                    Text("检查更新（网络异常，点击重试）", fontSize = 13.sp)
+                }
+                else -> {
+                    Icon(
+                        Icons.Filled.SystemUpdate,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("检查更新", fontSize = 13.sp)
+                }
+            }
+        }
+
+        // ─── Show update dialog if available from manual check ────────────────
+        if (currentUpdateState is UpdateManager.UpdateState.Available) {
+            UpdateDialog(
+                info = currentUpdateState.info,
+                currentVersion = updateManager?.getCurrentVersionName() ?: "1.0",
+                onUpdate = { updateManager?.downloadAndInstall(currentUpdateState.info) },
+                onDismiss = { updateManager?.dismiss() }
+            )
+        }
+
         Spacer(modifier = Modifier.height(60.dp))
         Text(
             text = "Drift · 游离\n© 2025 Drift Project",

@@ -33,6 +33,8 @@ import coil.Coil
 import coil.ImageLoader
 import coil.disk.DiskCache
 import com.kousoyu.drift.data.SourceManager
+import com.kousoyu.drift.data.UpdateManager
+import kotlinx.coroutines.launch
 
 // ─── Navigation Routes ────────────────────────────────────────────────────────
 object DriftRoutes {
@@ -81,7 +83,15 @@ class MainActivity : ComponentActivity() {
             )
             val themeMode by themeViewModel.themeMode.collectAsState()
 
+            // ─── Update Manager ──────────────────────────────────────────
+            val updateManager = remember { UpdateManager(this) }
+            val updateState by updateManager.updateState.collectAsState()
+            val coroutineScope = rememberCoroutineScope()
 
+            // Auto-check for updates on launch (silent, non-blocking)
+            LaunchedEffect(Unit) {
+                try { updateManager.checkUpdate() } catch (_: Exception) { }
+            }
 
             if (themeMode == ThemeMode.UNINITIALIZED) return@setContent
 
@@ -92,16 +102,36 @@ class MainActivity : ComponentActivity() {
             }
 
             DriftTheme(darkTheme = isDark) {
+                // ─── Show update dialog when available ────────────────────
+                if (updateState is UpdateManager.UpdateState.Available) {
+                    val info = (updateState as UpdateManager.UpdateState.Available).info
+                    UpdateDialog(
+                        info = info,
+                        currentVersion = updateManager.getCurrentVersionName(),
+                        onUpdate = { updateManager.downloadAndInstall(info) },
+                        onDismiss = { updateManager.dismiss() }
+                    )
+                }
+
                 val navController = rememberNavController()
+
+                // Download progress bar at top
+                Column {
+                    if (updateState is UpdateManager.UpdateState.Downloading) {
+                        UpdateDownloadingBar()
+                    }
+
                 NavHost(
                     navController = navController,
-                    startDestination = DriftRoutes.MAIN
+                    startDestination = DriftRoutes.MAIN,
+                    modifier = Modifier.weight(1f)
                 ) {
                     composable(DriftRoutes.MAIN) {
                     DriftApp(
                             navController    = navController,
                             currentTheme     = themeMode,
-                            onThemeChange    = { themeViewModel.setTheme(it) }
+                            onThemeChange    = { themeViewModel.setTheme(it) },
+                            updateManager    = updateManager
                         )
                     }
 
@@ -264,6 +294,7 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
+                } // end Column
             }
         }
     }
@@ -275,7 +306,8 @@ class MainActivity : ComponentActivity() {
 fun DriftApp(
     navController: NavHostController,
     currentTheme: ThemeMode,
-    onThemeChange: (ThemeMode) -> Unit
+    onThemeChange: (ThemeMode) -> Unit,
+    updateManager: UpdateManager? = null
 ) {
     var selectedIndex by remember { mutableIntStateOf(0) }
     val tabs  = listOf("漫画", "小说", "追番", "AI 助手", "我")
@@ -330,7 +362,8 @@ fun DriftApp(
                 4 -> ProfileScreen(
                     currentTheme  = currentTheme,
                     onThemeChange = onThemeChange,
-                    onNavigateToEdit = { navController.navigate(DriftRoutes.PROFILE_EDIT) }
+                    onNavigateToEdit = { navController.navigate(DriftRoutes.PROFILE_EDIT) },
+                    updateManager = updateManager
                 )
 
                 else -> ComingSoonScreen(label = tabs[selectedIndex])

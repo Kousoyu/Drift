@@ -5,11 +5,7 @@ plugins {
 
 android {
     namespace = "com.kousoyu.drift"
-    compileSdk {
-        version = release(36) {
-            minorApiLevel = 1
-        }
-    }
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.kousoyu.drift"
@@ -22,13 +18,11 @@ android {
     }
 
     signingConfigs {
-        create("releaseWithDebugKey") {
-            // 用系统自带的 debug keystore 签 Release 包，方便真机性能测试
-            // 正式上架时再换成正式签名
-            storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+        create("release") {
+            storeFile = file("../drift-release.keystore")
+            storePassword = "drift2026"
+            keyAlias = "drift"
+            keyPassword = "drift2026"
         }
     }
 
@@ -36,7 +30,7 @@ android {
         release {
             isMinifyEnabled = true          // 开启 R8 压缩 + 优化，性能大幅提升
             isShrinkResources = true        // 同时剔除无用资源
-            signingConfig = signingConfigs.getByName("releaseWithDebugKey")
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
