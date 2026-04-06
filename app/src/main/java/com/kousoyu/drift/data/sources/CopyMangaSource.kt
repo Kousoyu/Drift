@@ -42,11 +42,10 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
                 "version"    to "2.2.0",
                 "webp"       to "1"
             )
-            // Inject auth token as BOTH Authorization header AND Cookie
+            // Inject auth token in Authorization header
             val token = getToken()
             if (token.isNotEmpty()) {
                 base["authorization"] = "Token $token"
-                base["Cookie"] = "token=$token"
             }
             return base
         }
@@ -198,7 +197,10 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
     override suspend fun getMangaDetail(detailUrl: String): Result<MangaDetail> = withContext(Dispatchers.IO) {
         runCatching {
             val slug = detailUrl.trimEnd('/').substringAfterLast("/")
-            val comic = JSONObject(api.fetch("/comic2/$slug")).getJSONObject("results").getJSONObject("comic")
+            val detailJson = api.fetch("/comic2/$slug")
+            Log.d(TAG, "Detail response length=${detailJson.length}")
+            val results = JSONObject(detailJson).getJSONObject("results")
+            val comic = results.optJSONObject("comic") ?: results
 
             val chapJson = api.fetch("/comic/$slug/group/default/chapters?limit=500&offset=0")
             val chapArr  = JSONObject(chapJson).getJSONObject("results").let { r ->
@@ -288,15 +290,22 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
 
     /** Fetch chapter data. Try chapter2 first, fall back to legacy. */
     private fun fetchChapter(slug: String, uuid: String): String {
+        // Add Cookie header for chapter requests (needed for full content)
+        val chapterExtra = mutableMapOf<String, String>()
+        val token = getToken()
+        if (token.isNotEmpty()) {
+            chapterExtra["Cookie"] = "token=$token"
+        }
+
         try {
             Log.d(TAG, "Fetching /comic/$slug/chapter2/$uuid")
-            val result = api.fetch("/comic/$slug/chapter2/$uuid")
+            val result = api.fetch("/comic/$slug/chapter2/$uuid", chapterExtra)
             Log.d(TAG, "chapter2 OK, length=${result.length}")
             return result
         } catch (e: Exception) {
             Log.w(TAG, "chapter2 failed: ${e.message}, trying legacy")
         }
-        val result = api.fetch("/comic/$slug/chapter/$uuid")
+        val result = api.fetch("/comic/$slug/chapter/$uuid", chapterExtra)
         Log.d(TAG, "chapter(legacy) OK, length=${result.length}")
         return result
     }
