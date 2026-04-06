@@ -284,31 +284,63 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
         }
     }
 
-    /** Fetch chapter data, trying chapter2 first then legacy endpoint. */
+    /** 
+     * Fetch chapter data, trying multiple strategies to get ALL pages.
+     * The API may limit contents to 5 pages depending on platform/endpoint.
+     */
     private fun fetchChapter(slug: String, uuid: String): String {
-        // Try chapter2 first
-        try {
-            Log.d(TAG, "Trying chapter2: /comic/$slug/chapter2/$uuid")
-            val result = api.fetch("/comic/$slug/chapter2/$uuid")
-            Log.d(TAG, "chapter2 OK, length=${result.length}")
-            // Dump full response for diagnosis (small enough)
-            Log.d(TAG, "chapter2 FULL RESPONSE: $result")
-            return result
-        } catch (e: Exception) {
-            Log.w(TAG, "chapter2 failed: ${e.message}")
+        data class Strategy(val path: String, val platform: String, val extra: String = "")
+
+        val strategies = listOf(
+            // Try different platform values with chapter2
+            Strategy("/comic/$slug/chapter2/$uuid?platform=3", "3"),
+            Strategy("/comic/$slug/chapter2/$uuid?platform=1", "1"),
+            Strategy("/comic/$slug/chapter2/$uuid?platform=2", "2"),
+            // Try legacy chapter with different platforms
+            Strategy("/comic/$slug/chapter/$uuid?platform=3", "3"),
+            Strategy("/comic/$slug/chapter/$uuid?platform=1&limit=500&offset=0", "1"),
+            // Default
+            Strategy("/comic/$slug/chapter2/$uuid", "1"),
+        )
+
+        var bestResult: String? = null
+        var bestCount = 0
+
+        for ((i, s) in strategies.withIndex()) {
+            try {
+                val extraHeaders = mapOf("platform" to s.platform)
+                val result = api.fetch(s.path, extraHeaders)
+                val json = JSONObject(result)
+                if (json.optInt("code") != 200) continue
+
+                val contents = json.optJSONObject("results")
+                    ?.optJSONObject("chapter")
+                    ?.optJSONArray("contents")
+                val count = contents?.length() ?: 0
+
+                Log.d(TAG, "Strategy[$i] ${s.path.substringBefore("?")}?platform=${s.platform}: $count images")
+
+                if (count > bestCount) {
+                    bestCount = count
+                    bestResult = result
+                }
+
+                // If we got more than 5, we found the working strategy
+                if (count > 5) {
+                    Log.i(TAG, "Found working strategy[$i]: $count images with platform=${s.platform}")
+                    return result
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Strategy[$i] failed: ${e.message}")
+            }
         }
 
-        // Try legacy chapter
-        try {
-            Log.d(TAG, "Trying chapter: /comic/$slug/chapter/$uuid")
-            val result = api.fetch("/comic/$slug/chapter/$uuid")
-            Log.d(TAG, "chapter OK, length=${result.length}")
-            Log.d(TAG, "chapter FULL RESPONSE: $result")
-            return result
-        } catch (e: Exception) {
-            Log.e(TAG, "chapter also failed: ${e.message}")
-            throw e
+        // Return best result we found
+        if (bestResult != null) {
+            Log.d(TAG, "Best strategy returned $bestCount images")
+            return bestResult
         }
+        error("All chapter fetch strategies failed for $slug/$uuid")
     }
 
     /** Ensure we have a valid auth token. Login if needed. */
