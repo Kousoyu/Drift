@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.net.URLDecoder
 
 sealed class DetailState {
@@ -37,20 +38,23 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
                 val explicitSourceName = if (sourceNameEncoded.isNotEmpty()) URLDecoder.decode(sourceNameEncoded, "UTF-8") else ""
 
                 // Track local DB entity (favorite status & reading progress)
-                launch {
+                launch(Dispatchers.IO) {
                     dao.getMangaByUrlFlow(url).collect { _localManga.value = it }
                 }
 
-                val targetSource = when {
-                    explicitSourceName.isNotEmpty() -> SourceManager.getSourceByName(explicitSourceName)
-                    else -> dao.getMangaByUrlSync(url)?.sourceName?.let { SourceManager.getSourceByName(it) }
-                        ?: SourceManager.currentSource.value
+                // Resolve source (DB access on IO thread)
+                val targetSource = withContext(Dispatchers.IO) {
+                    when {
+                        explicitSourceName.isNotEmpty() -> SourceManager.getSourceByName(explicitSourceName)
+                        else -> dao.getMangaByUrlSync(url)?.sourceName
+                            ?.let { SourceManager.getSourceByName(it) }
+                            ?: SourceManager.currentSource.value
+                    }
                 }
 
                 targetSource.getMangaDetail(url)
                     .onSuccess { detail ->
                         state = DetailState.Success(detail)
-                        // Auto-update chapter count for favorites
                         syncChapterCount(url, detail)
                     }
                     .onFailure { state = DetailState.Error(it.message ?: "加载失败") }

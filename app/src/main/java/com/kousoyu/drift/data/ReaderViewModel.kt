@@ -12,6 +12,7 @@ import com.kousoyu.drift.data.local.DriftDatabase
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 sealed class ReaderState {
     object Loading : ReaderState()
@@ -70,18 +71,20 @@ class ReaderViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
 
-                // Resolve source
-                val targetSource = when {
-                    explicitSource.isNotEmpty() -> SourceManager.getSourceByName(explicitSource)
-                    mangaUrl.isNotEmpty() -> dao.getMangaByUrlSync(mangaUrl)?.sourceName
-                        ?.let { SourceManager.getSourceByName(it) } ?: SourceManager.currentSource.value
-                    else -> SourceManager.currentSource.value
+                // Resolve source (ALL DB access on IO thread)
+                val targetSource = withContext(Dispatchers.IO) {
+                    when {
+                        explicitSource.isNotEmpty() -> SourceManager.getSourceByName(explicitSource)
+                        mangaUrl.isNotEmpty() -> dao.getMangaByUrlSync(mangaUrl)?.sourceName
+                            ?.let { SourceManager.getSourceByName(it) } ?: SourceManager.currentSource.value
+                        else -> SourceManager.currentSource.value
+                    }
                 }
 
                 // Load initial page from DB
-                val savedPage = if (mangaUrl.isNotEmpty()) {
-                    dao.getMangaByUrlSync(mangaUrl)?.lastReadPage ?: 0
-                } else 0
+                val savedPage = withContext(Dispatchers.IO) {
+                    if (mangaUrl.isNotEmpty()) dao.getMangaByUrlSync(mangaUrl)?.lastReadPage ?: 0 else 0
+                }
 
                 targetSource.getChapterImages(url)
                     .onSuccess { images ->
