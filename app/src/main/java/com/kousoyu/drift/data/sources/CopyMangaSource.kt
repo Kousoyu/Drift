@@ -120,55 +120,91 @@ class CopyMangaSource(client: OkHttpClient) : MangaSource {
             val uuid  = parts.last()
             val slug  = parts[parts.size - 3]
 
-            val chapJson = api.fetch("/comic/$slug/chapter/$uuid")
+            // Use chapter2 endpoint (returns all pages, not limited to 5)
+            val chapJson = try {
+                api.fetch("/comic/$slug/chapter2/$uuid")
+            } catch (_: Exception) {
+                // Fallback to legacy endpoint
+                api.fetch("/comic/$slug/chapter/$uuid")
+            }
+
             val results  = JSONObject(chapJson).getJSONObject("results")
             val chapObj  = results.getJSONObject("chapter")
             val contents = chapObj.optJSONArray("contents")
-            val firstUrl = contents?.optJSONObject(0)?.optString("url", "") ?: ""
+            val words    = chapObj.optJSONArray("words")
 
-            // ── Plain URL mode (most common) ────────────────────────────────
-            if (firstUrl.startsWith("http")) {
-                return@runCatching (0 until contents!!.length()).map { contents.getJSONObject(it).getString("url") }
-            }
+            // Extract raw URL list
+            val rawUrls = extractImageUrls(chapObj, results, contents, slug, uuid)
 
-            // ── Encrypted mode — find AES key ──────────────────────────────
-            val jsVersion = chapObj.optString("js_version").ifEmpty { null }
-                          ?: results.optString("js_version").ifEmpty { null }
-
-            val passJsUrl = if (jsVersion != null) {
-                "$s3Base/static/websitefree/js20190704/comic_content_pass$jsVersion.js"
+            // Apply words reordering if present
+            // words[i] indicates the page position of contents[i]
+            if (words != null && words.length() == rawUrls.size && words.length() > 0) {
+                val ordered = Array(rawUrls.size) { "" }
+                for (i in rawUrls.indices) {
+                    val pageIndex = words.getInt(i)
+                    if (pageIndex in ordered.indices) {
+                        ordered[pageIndex] = rawUrls[i]
+                    }
+                }
+                // Filter out any empty slots (shouldn't happen, but safety)
+                ordered.filter { it.isNotEmpty() }
             } else {
-                findPassJsUrl(slug, uuid)
-            } ?: error("Cannot locate comic_content_pass JS")
-
-            val aesKey = Regex("""var\s+\w+\s*=\s*['"](.{16})['"]""")
-                .findAll(api.fetchDirect(passJsUrl)).map { it.groupValues[1] }.firstOrNull()
-                ?: error("AES key not found in $passJsUrl")
-
-            // ── Per-image hex decryption ────────────────────────────────────
-            if (firstUrl.matches(Regex("[0-9a-fA-F]{33,}"))) {
-                return@runCatching (0 until contents!!.length()).map {
-                    decrypt(contents.getJSONObject(it).getString("url"), aesKey)
-                }
+                rawUrls
             }
-
-            // ── Whole-blob contentKey mode ──────────────────────────────────
-            val contentKey = chapObj.optString("content_key").ifEmpty { null }
-                           ?: chapObj.optString("contentKey").ifEmpty { null }
-            if (contentKey != null && contentKey.length > 32) {
-                val arr = JSONObject(decrypt(contentKey, aesKey)).optJSONArray("contents")
-                    ?: error("Unexpected decrypted JSON")
-                return@runCatching (0 until arr.length()).mapNotNull {
-                    arr.optJSONObject(it)?.optString("url")?.takeIf { u -> u.isNotEmpty() }
-                }
-            }
-
-            // ── Fallback ────────────────────────────────────────────────────
-            if (contents != null && contents.length() > 0) {
-                return@runCatching (0 until contents.length()).map { contents.getJSONObject(it).getString("url") }
-            }
-            error("No content found in chapter API response")
         }
+    }
+
+    /**
+     * Extract image URLs from chapter response, handling plain / encrypted / contentKey modes.
+     */
+    private fun extractImageUrls(
+        chapObj: JSONObject, results: JSONObject,
+        contents: org.json.JSONArray?, slug: String, uuid: String
+    ): List<String> {
+        val firstUrl = contents?.optJSONObject(0)?.optString("url", "") ?: ""
+
+        // ── Plain URL mode (most common) ────────────────────────────────
+        if (firstUrl.startsWith("http")) {
+            return (0 until contents!!.length()).map { contents.getJSONObject(it).getString("url") }
+        }
+
+        // ── Encrypted mode — find AES key ──────────────────────────────
+        val jsVersion = chapObj.optString("js_version").ifEmpty { null }
+                      ?: results.optString("js_version").ifEmpty { null }
+
+        val passJsUrl = if (jsVersion != null) {
+            "$s3Base/static/websitefree/js20190704/comic_content_pass$jsVersion.js"
+        } else {
+            findPassJsUrl(slug, uuid)
+        } ?: error("Cannot locate comic_content_pass JS")
+
+        val aesKey = Regex("""var\s+\w+\s*=\s*['"](.{16})['"]""")
+            .findAll(api.fetchDirect(passJsUrl)).map { it.groupValues[1] }.firstOrNull()
+            ?: error("AES key not found in $passJsUrl")
+
+        // ── Per-image hex decryption ────────────────────────────────────
+        if (firstUrl.matches(Regex("[0-9a-fA-F]{33,}"))) {
+            return (0 until contents!!.length()).map {
+                decrypt(contents.getJSONObject(it).getString("url"), aesKey)
+            }
+        }
+
+        // ── Whole-blob contentKey mode ──────────────────────────────────
+        val contentKey = chapObj.optString("content_key").ifEmpty { null }
+                       ?: chapObj.optString("contentKey").ifEmpty { null }
+        if (contentKey != null && contentKey.length > 32) {
+            val arr = JSONObject(decrypt(contentKey, aesKey)).optJSONArray("contents")
+                ?: error("Unexpected decrypted JSON")
+            return (0 until arr.length()).mapNotNull {
+                arr.optJSONObject(it)?.optString("url")?.takeIf { u -> u.isNotEmpty() }
+            }
+        }
+
+        // ── Fallback ────────────────────────────────────────────────────
+        if (contents != null && contents.length() > 0) {
+            return (0 until contents.length()).map { contents.getJSONObject(it).getString("url") }
+        }
+        error("No content found in chapter API response")
     }
 
     override fun getHeaders(): Map<String, String> = apiHeaders
