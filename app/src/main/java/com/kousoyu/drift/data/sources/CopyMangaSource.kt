@@ -190,31 +190,58 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
             val uuid  = parts.last()
             val slug  = parts[parts.size - 3]
 
-            // Try chapter2 endpoint first (returns all pages), fallback to legacy
-            val chapJson = try {
-                api.fetch("/comic/$slug/chapter2/$uuid")
-            } catch (_: Exception) {
-                api.fetch("/comic/$slug/chapter/$uuid")
-            }
+            // Always ensure we have a valid token before fetching images
+            ensureAuthenticated()
 
+            val chapJson = fetchChapter(slug, uuid)
             val json = JSONObject(chapJson)
             val code = json.optInt("code")
-            if (code == 210) {
-                // Auth required — attempt auto-login if not already logged in
-                if (!isLoggedIn()) {
-                    login(DEFAULT_USER, DEFAULT_PASS).getOrThrow()
-                    // Retry with new token
-                    val retryJson = try {
-                        api.fetch("/comic/$slug/chapter2/$uuid")
-                    } catch (_: Exception) {
-                        api.fetch("/comic/$slug/chapter/$uuid")
-                    }
-                    return@runCatching parseChapterImages(JSONObject(retryJson), slug, uuid)
-                }
-                error(json.optString("message", "需要登录 (210)"))
+
+            if (code != 200) {
+                // Token might be expired — re-login and retry
+                Log.w("CopyManga", "Chapter fetch code=$code, re-authenticating...")
+                cachedToken = null
+                prefs?.edit()?.remove("token")?.apply()
+                ensureAuthenticated()
+                val retryJson = fetchChapter(slug, uuid)
+                return@runCatching parseChapterImages(JSONObject(retryJson), slug, uuid)
             }
 
-            parseChapterImages(json, slug, uuid)
+            val result = parseChapterImages(json, slug, uuid)
+
+            // Sanity check: if we got fewer images than expected, token may be bad
+            val expectedSize = json.optJSONObject("results")
+                ?.optJSONObject("chapter")?.optInt("size", 0) ?: 0
+            if (expectedSize > 0 && result.size < expectedSize && result.size <= 5) {
+                Log.w("CopyManga", "Got ${result.size} images but size=$expectedSize, re-auth...")
+                cachedToken = null
+                prefs?.edit()?.remove("token")?.apply()
+                ensureAuthenticated()
+                val retryJson = fetchChapter(slug, uuid)
+                return@runCatching parseChapterImages(JSONObject(retryJson), slug, uuid)
+            }
+
+            result
+        }
+    }
+
+    /** Fetch chapter data, trying chapter2 first then legacy endpoint. */
+    private fun fetchChapter(slug: String, uuid: String): String {
+        return try {
+            api.fetch("/comic/$slug/chapter2/$uuid")
+        } catch (_: Exception) {
+            api.fetch("/comic/$slug/chapter/$uuid")
+        }
+    }
+
+    /** Ensure we have a valid auth token. Login if needed. */
+    private suspend fun ensureAuthenticated() {
+        if (getToken().isNotEmpty()) return
+        Log.i("CopyManga", "No token found, auto-logging in...")
+        try {
+            login(DEFAULT_USER, DEFAULT_PASS).getOrThrow()
+        } catch (e: Exception) {
+            Log.w("CopyManga", "Auto-login failed: ${e.message}")
         }
     }
 
