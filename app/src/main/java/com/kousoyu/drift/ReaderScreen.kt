@@ -29,15 +29,8 @@ import coil.compose.SubcomposeAsyncImage
 import coil.request.CachePolicy
 import coil.request.ImageRequest
 import coil.imageLoader
-import me.saket.telephoto.zoomable.rememberZoomableState
-import me.saket.telephoto.zoomable.zoomable
-import androidx.compose.foundation.gestures.animateScrollBy
-import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.input.pointer.pointerInput
 import com.kousoyu.drift.data.ReaderState
 import com.kousoyu.drift.data.ReaderViewModel
-import kotlinx.coroutines.launch
 import java.net.URLDecoder
 
 // ─── Reader Screen ─────────────────────────────────────────────────────────────
@@ -148,25 +141,12 @@ fun ReaderScreen(
                             pageNumber = index + 1,
                             totalPages = images.size,
                             context = context,
-                            headers = state.headers
+                            headers = state.headers,
+                            onTap = { showMenu = !showMenu }
                         )
                     }
                     item { Spacer(Modifier.height(32.dp)) }
                 }
-
-                // ── Center-tap overlay for menu toggle ──────────────────────
-                // Only covers the middle 40% of the screen so scrolling is
-                // not blocked at the top/bottom edges.
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .fillMaxHeight(0.4f)
-                        .align(Alignment.Center)
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
-                        ) { showMenu = !showMenu }
-                )
             }
         }
 
@@ -297,12 +277,10 @@ private fun MangaPage(
     pageNumber: Int,
     totalPages: Int,
     context: android.content.Context,
-    headers: Map<String, String>
+    headers: Map<String, String>,
+    onTap: () -> Unit = {}
 ) {
-    // Strip any #jm_scramble fragment for Coil (metadata only, not part of the URL)
     val cleanUrl = url.substringBefore("#")
-
-    // Increment to force Coil to re-fetch a failed image
     var retryKey by remember { mutableIntStateOf(0) }
 
     val imageRequest = remember(cleanUrl, retryKey) {
@@ -312,7 +290,6 @@ private fun MangaPage(
             .diskCacheKey(cleanUrl)
             .diskCachePolicy(CachePolicy.ENABLED)
             .memoryCachePolicy(CachePolicy.ENABLED)
-            // Allow network fetch; Coil uses OkHttp's connection pool internally
             .networkCachePolicy(CachePolicy.ENABLED)
             .apply {
                 headers.forEach { (key, value) -> addHeader(key, value) }
@@ -321,25 +298,23 @@ private fun MangaPage(
             .build()
     }
 
-    val zoomableState = rememberZoomableState()
-
     SubcomposeAsyncImage(
         model = imageRequest,
         contentDescription = "第 $pageNumber 页",
         contentScale = ContentScale.FillWidth,
         modifier = Modifier
             .fillMaxWidth()
-            .zoomable(zoomableState),
+            .clickable(
+                indication = null,
+                interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+            ) { onTap() },
         loading = {
-            // ── PLACEHOLDER: full-width box with min-height so scroll is never
-            // blocked even while bytes are still in flight.
             PageLoadingPlaceholder(
                 pageNumber = pageNumber,
                 totalPages = totalPages
             )
         },
         error = {
-            // ── PER-PAGE ERROR: tap to retry just this single image.
             PageErrorPlaceholder(
                 pageNumber = pageNumber,
                 onRetry = { retryKey++ }
