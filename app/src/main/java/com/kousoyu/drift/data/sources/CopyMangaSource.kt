@@ -39,12 +39,14 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
                 "Referer"    to "$baseUrl/",
                 "platform"   to "1",
                 "region"     to "1",
-                "version"    to "2.2.0"
+                "version"    to "2.2.0",
+                "webp"       to "1"
             )
-            // Inject auth token if available
+            // Inject auth token as BOTH Authorization header AND Cookie
             val token = getToken()
             if (token.isNotEmpty()) {
                 base["authorization"] = "Token $token"
+                base["Cookie"] = "token=$token"
             }
             return base
         }
@@ -284,63 +286,19 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
         }
     }
 
-    /** 
-     * Fetch chapter data, trying multiple strategies to get ALL pages.
-     * The API may limit contents to 5 pages depending on platform/endpoint.
-     */
+    /** Fetch chapter data. Try chapter2 first, fall back to legacy. */
     private fun fetchChapter(slug: String, uuid: String): String {
-        data class Strategy(val path: String, val platform: String, val extra: String = "")
-
-        val strategies = listOf(
-            // Try different platform values with chapter2
-            Strategy("/comic/$slug/chapter2/$uuid?platform=3", "3"),
-            Strategy("/comic/$slug/chapter2/$uuid?platform=1", "1"),
-            Strategy("/comic/$slug/chapter2/$uuid?platform=2", "2"),
-            // Try legacy chapter with different platforms
-            Strategy("/comic/$slug/chapter/$uuid?platform=3", "3"),
-            Strategy("/comic/$slug/chapter/$uuid?platform=1&limit=500&offset=0", "1"),
-            // Default
-            Strategy("/comic/$slug/chapter2/$uuid", "1"),
-        )
-
-        var bestResult: String? = null
-        var bestCount = 0
-
-        for ((i, s) in strategies.withIndex()) {
-            try {
-                val extraHeaders = mapOf("platform" to s.platform)
-                val result = api.fetch(s.path, extraHeaders)
-                val json = JSONObject(result)
-                if (json.optInt("code") != 200) continue
-
-                val contents = json.optJSONObject("results")
-                    ?.optJSONObject("chapter")
-                    ?.optJSONArray("contents")
-                val count = contents?.length() ?: 0
-
-                Log.d(TAG, "Strategy[$i] ${s.path.substringBefore("?")}?platform=${s.platform}: $count images")
-
-                if (count > bestCount) {
-                    bestCount = count
-                    bestResult = result
-                }
-
-                // If we got more than 5, we found the working strategy
-                if (count > 5) {
-                    Log.i(TAG, "Found working strategy[$i]: $count images with platform=${s.platform}")
-                    return result
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "Strategy[$i] failed: ${e.message}")
-            }
+        try {
+            Log.d(TAG, "Fetching /comic/$slug/chapter2/$uuid")
+            val result = api.fetch("/comic/$slug/chapter2/$uuid")
+            Log.d(TAG, "chapter2 OK, length=${result.length}")
+            return result
+        } catch (e: Exception) {
+            Log.w(TAG, "chapter2 failed: ${e.message}, trying legacy")
         }
-
-        // Return best result we found
-        if (bestResult != null) {
-            Log.d(TAG, "Best strategy returned $bestCount images")
-            return bestResult
-        }
-        error("All chapter fetch strategies failed for $slug/$uuid")
+        val result = api.fetch("/comic/$slug/chapter/$uuid")
+        Log.d(TAG, "chapter(legacy) OK, length=${result.length}")
+        return result
     }
 
     /** Ensure we have a valid auth token. Login if needed. */
