@@ -137,25 +137,7 @@ fun ReaderScreen(
 
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .pointerInput(Unit) {
-                            detectTapGestures(
-                                onTap = { offset ->
-                                    val y = offset.y
-                                    val height = size.height
-                                    when {
-                                        y < height * 0.3f -> coroutineScope.launch {
-                                            listState.animateScrollBy(-height * 0.8f)
-                                        }
-                                        y > height * 0.7f -> coroutineScope.launch {
-                                            listState.animateScrollBy(height * 0.8f)
-                                        }
-                                        else -> showMenu = !showMenu
-                                    }
-                                }
-                            )
-                        }
+                    modifier = Modifier.fillMaxSize()
                 ) {
                     itemsIndexed(
                         items = images,
@@ -169,10 +151,22 @@ fun ReaderScreen(
                             headers = state.headers
                         )
                     }
-
-                    // Bottom padding so the last page can scroll fully into view
                     item { Spacer(Modifier.height(32.dp)) }
                 }
+
+                // ── Center-tap overlay for menu toggle ──────────────────────
+                // Only covers the middle 40% of the screen so scrolling is
+                // not blocked at the top/bottom edges.
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .fillMaxHeight(0.4f)
+                        .align(Alignment.Center)
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+                        ) { showMenu = !showMenu }
+                )
             }
         }
 

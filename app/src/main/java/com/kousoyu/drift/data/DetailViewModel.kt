@@ -30,26 +30,29 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
     private val _localManga = MutableStateFlow<MangaEntity?>(null)
     val localManga: StateFlow<MangaEntity?> = _localManga
 
-    // Cache: avoid re-fetching when navigating back from reader
-    private var cachedUrl: String? = null
-
     fun loadDetail(urlEncoded: String, sourceNameEncoded: String = "") {
         val url = URLDecoder.decode(urlEncoded, "UTF-8")
 
-        // If we already have this detail loaded, skip the fetch
-        if (url == cachedUrl && state is DetailState.Success) return
+        // Static cache hit → instant render, no network
+        val cached = detailCache[url]
+        if (cached != null) {
+            state = DetailState.Success(cached)
+            // Still track local DB entity in background
+            viewModelScope.launch(Dispatchers.IO) {
+                dao.getMangaByUrlFlow(url).collect { _localManga.value = it }
+            }
+            return
+        }
 
         viewModelScope.launch {
             state = DetailState.Loading
             try {
                 val explicitSourceName = if (sourceNameEncoded.isNotEmpty()) URLDecoder.decode(sourceNameEncoded, "UTF-8") else ""
 
-                // Track local DB entity (favorite status & reading progress)
                 launch(Dispatchers.IO) {
                     dao.getMangaByUrlFlow(url).collect { _localManga.value = it }
                 }
 
-                // Resolve source (DB access on IO thread)
                 val targetSource = withContext(Dispatchers.IO) {
                     when {
                         explicitSourceName.isNotEmpty() -> SourceManager.getSourceByName(explicitSourceName)
@@ -61,7 +64,9 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
 
                 targetSource.getMangaDetail(url)
                     .onSuccess { detail ->
-                        cachedUrl = url
+                        // Static cache: survives ViewModel destruction
+                        detailCache[url] = detail
+                        while (detailCache.size > 10) detailCache.keys.first().let { detailCache.remove(it) }
                         state = DetailState.Success(detail)
                         syncChapterCount(url, detail)
                     }
@@ -72,7 +77,6 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** If this manga is favorited, update the stored chapter count + latest chapter name. */
     private fun syncChapterCount(mangaUrl: String, detail: MangaDetail) {
         viewModelScope.launch(Dispatchers.IO) {
             val entity = dao.getMangaByUrlSync(mangaUrl) ?: return@launch
@@ -98,5 +102,10 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
                 dao.insertMangaSync(entity)
             }
         }
+    }
+
+    companion object {
+        /** Static detail cache — survives navigation. Max 10 entries. */
+        private val detailCache = LinkedHashMap<String, MangaDetail>()
     }
 }
