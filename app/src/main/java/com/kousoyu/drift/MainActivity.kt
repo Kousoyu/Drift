@@ -29,6 +29,9 @@ import com.kousoyu.drift.ui.theme.ThemeMode
 import com.kousoyu.drift.ui.theme.ThemeViewModel
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.lifecycle.viewmodel.compose.viewModel
+import coil.Coil
+import coil.ImageLoader
+import coil.disk.DiskCache
 
 // ─── Navigation Routes ────────────────────────────────────────────────────────
 object DriftRoutes {
@@ -54,6 +57,20 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+
+        // ── Coil: 256MB disk cache for instant re-reads ──
+        Coil.setImageLoader(
+            ImageLoader.Builder(this)
+                .diskCache {
+                    DiskCache.Builder()
+                        .directory(cacheDir.resolve("image_cache"))
+                        .maxSizeBytes(256L * 1024 * 1024)
+                        .build()
+                }
+                .crossfade(150)
+                .build()
+        )
+
         setContent {
             val themeViewModel: ThemeViewModel = viewModel(
                 factory = ThemeViewModel.Factory(this)

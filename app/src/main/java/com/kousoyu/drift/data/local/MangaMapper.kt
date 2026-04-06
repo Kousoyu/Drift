@@ -2,7 +2,6 @@ package com.kousoyu.drift.data.local
 
 import com.kousoyu.drift.data.Manga
 
-// Extension function to map Entity back to UI Domain Model
 fun MangaEntity.toDomainManga(): Manga {
     return Manga(
         title = this.title,
@@ -10,13 +9,12 @@ fun MangaEntity.toDomainManga(): Manga {
         detailUrl = this.detailUrl,
         latestChapter = this.lastReadChapterName ?: this.latestChapter,
         genre = this.genre,
-        author = "", // author is not mapped in entity directly
+        author = "",
         sourceName = this.sourceName
     )
 }
 
-// Extension function to map Domain Model to Entity
-fun Manga.toEntity(sourceName: String = "包子漫画"): MangaEntity {
+fun Manga.toEntity(sourceName: String = this.sourceName): MangaEntity {
     return MangaEntity(
         this.detailUrl,
         this.title,

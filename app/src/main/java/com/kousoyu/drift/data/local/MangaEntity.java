@@ -27,6 +27,8 @@ public class MangaEntity {
     
     public String lastReadChapterName = null;
     public String lastReadChapterUrl = null;
+    public int lastReadPage = 0;
+    public int totalChapters = 0;
     
     public long addedAt = System.currentTimeMillis();
 

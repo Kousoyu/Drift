@@ -11,6 +11,7 @@ import com.kousoyu.drift.data.local.MangaEntity
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
 import java.net.URLDecoder
 
 sealed class DetailState {
@@ -34,50 +35,54 @@ class DetailViewModel(app: Application) : AndroidViewModel(app) {
             try {
                 val url = URLDecoder.decode(urlEncoded, "UTF-8")
                 val explicitSourceName = if (sourceNameEncoded.isNotEmpty()) URLDecoder.decode(sourceNameEncoded, "UTF-8") else ""
-                
+
                 // Track local DB entity (favorite status & reading progress)
-                var solvedSource = if (explicitSourceName.isNotEmpty()) SourceManager.getSourceByName(explicitSourceName) else SourceManager.currentSource.value
                 launch {
-                    dao.getMangaByUrlFlow(url).collect { entity ->
-                        _localManga.value = entity
-                        // If it's a favorite, override source with the one from DB
-                        if (entity != null && entity.sourceName.isNotEmpty()) {
-                            solvedSource = SourceManager.getSourceByName(entity.sourceName)
-                        }
-                    }
+                    dao.getMangaByUrlFlow(url).collect { _localManga.value = it }
                 }
 
-                val targetSource = if (explicitSourceName.isNotEmpty()) SourceManager.getSourceByName(explicitSourceName)
-                    else dao.getMangaByUrlSync(url)?.sourceName?.let { SourceManager.getSourceByName(it) } ?: SourceManager.currentSource.value
-                
-                // Override solvedSource for favorite saving
-                solvedSource = targetSource
-                
+                val targetSource = when {
+                    explicitSourceName.isNotEmpty() -> SourceManager.getSourceByName(explicitSourceName)
+                    else -> dao.getMangaByUrlSync(url)?.sourceName?.let { SourceManager.getSourceByName(it) }
+                        ?: SourceManager.currentSource.value
+                }
+
                 targetSource.getMangaDetail(url)
-                    .onSuccess { state = DetailState.Success(it) }
-                    .onFailure { state = DetailState.Error(it.message ?: "Failed to load detail") }
+                    .onSuccess { detail ->
+                        state = DetailState.Success(detail)
+                        // Auto-update chapter count for favorites
+                        syncChapterCount(url, detail)
+                    }
+                    .onFailure { state = DetailState.Error(it.message ?: "加载失败") }
             } catch (e: Exception) {
-                state = DetailState.Error(e.message ?: "Invalid URL")
+                state = DetailState.Error(e.message ?: "无效URL")
+            }
+        }
+    }
+
+    /** If this manga is favorited, update the stored chapter count + latest chapter name. */
+    private fun syncChapterCount(mangaUrl: String, detail: MangaDetail) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val entity = dao.getMangaByUrlSync(mangaUrl) ?: return@launch
+            val newCount = detail.chapters.size
+            if (newCount != entity.totalChapters && newCount > 0) {
+                val latestName = detail.chapters.lastOrNull()?.name ?: ""
+                dao.updateChapterCountSync(mangaUrl, newCount, latestName)
             }
         }
     }
 
     fun toggleFavorite(mangaDetail: MangaDetail, currentSourceName: String = "") {
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        viewModelScope.launch(Dispatchers.IO) {
             val url = mangaDetail.url
             val existing = dao.getMangaByUrlSync(url)
             if (existing != null) {
                 dao.deleteMangaSync(existing)
             } else {
-                val sourceName = if (currentSourceName.isNotEmpty()) currentSourceName else SourceManager.currentSource.value.name
-                val entity = MangaEntity(
-                    url,
-                    mangaDetail.title,
-                    mangaDetail.coverUrl,
-                    sourceName,
-                    "",
-                    ""
-                )
+                val sourceName = currentSourceName.ifEmpty { SourceManager.currentSource.value.name }
+                val entity = MangaEntity(url, mangaDetail.title, mangaDetail.coverUrl, sourceName, "", "")
+                entity.totalChapters = mangaDetail.chapters.size
+                entity.latestChapter = mangaDetail.chapters.lastOrNull()?.name ?: ""
                 dao.insertMangaSync(entity)
             }
         }

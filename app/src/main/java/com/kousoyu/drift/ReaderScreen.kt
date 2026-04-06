@@ -12,6 +12,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.automirrored.filled.ArrowLeft
+import androidx.compose.material.icons.automirrored.filled.ArrowRight
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -59,6 +61,21 @@ fun ReaderScreen(
     }
 
     val listState = rememberLazyListState()
+
+    // ── Restore scroll position from saved page ──
+    val successState = viewModel.state as? ReaderState.Success
+    LaunchedEffect(successState?.initialPage) {
+        val page = successState?.initialPage ?: 0
+        if (page > 0 && successState != null) {
+            listState.scrollToItem(page.coerceAtMost(successState.images.size - 1))
+        }
+    }
+
+    // ── Track page changes (debounced save to Room) ──
+    LaunchedEffect(listState.firstVisibleItemIndex) {
+        viewModel.onPageChanged(listState.firstVisibleItemIndex)
+    }
+
     val coroutineScope = rememberCoroutineScope()
     val context = LocalContext.current
 
@@ -189,21 +206,56 @@ fun ReaderScreen(
             }
         }
 
-        // ── Bottom overlay: page counter ──────────────────────────────────────
+        // ── Always-visible page counter (subtle, bottom-right) ─────────────────
+        if (viewModel.state is ReaderState.Success && !showMenu) {
+            val images = (viewModel.state as ReaderState.Success).images
+            val current = (listState.firstVisibleItemIndex + 1).coerceIn(1, images.size.coerceAtLeast(1))
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .navigationBarsPadding()
+                    .padding(16.dp)
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(Color.Black.copy(alpha = 0.5f))
+                    .padding(horizontal = 10.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    text = "$current / ${images.size}",
+                    fontSize = 11.sp,
+                    color = Color.White.copy(alpha = 0.6f)
+                )
+            }
+        }
+
+        // ── Bottom overlay: chapter nav + page counter ───────────────────────────
         AnimatedVisibility(
             visible = showMenu,
             enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
             exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
             modifier = Modifier.align(Alignment.BottomCenter)
         ) {
-            Box(
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(Color.Black.copy(alpha = 0.85f))
                     .navigationBarsPadding()
-                    .height(64.dp),
-                contentAlignment = Alignment.Center
+                    .height(56.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
             ) {
+                // Prev chapter
+                IconButton(
+                    onClick = { viewModel.navigateChapter(-1) },
+                    enabled = viewModel.hasPrevChapter
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowLeft,
+                        contentDescription = "上一章",
+                        tint = if (viewModel.hasPrevChapter) Color.White else Color.White.copy(alpha = 0.2f)
+                    )
+                }
+
+                // Page counter
                 if (viewModel.state is ReaderState.Success) {
                     val images = (viewModel.state as ReaderState.Success).images
                     val current = (listState.firstVisibleItemIndex + 1).coerceIn(1, images.size.coerceAtLeast(1))
@@ -211,6 +263,18 @@ fun ReaderScreen(
                         text = "$current / ${images.size}",
                         color = Color.White,
                         style = MaterialTheme.typography.bodyMedium
+                    )
+                }
+
+                // Next chapter
+                IconButton(
+                    onClick = { viewModel.navigateChapter(1) },
+                    enabled = viewModel.hasNextChapter
+                ) {
+                    Icon(
+                        Icons.AutoMirrored.Filled.ArrowRight,
+                        contentDescription = "下一章",
+                        tint = if (viewModel.hasNextChapter) Color.White else Color.White.copy(alpha = 0.2f)
                     )
                 }
             }

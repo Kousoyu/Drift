@@ -29,6 +29,12 @@ public interface MangaDao {
     @Query("UPDATE manga_bookshelf SET lastReadChapterName = :chapterName, lastReadChapterUrl = :chapterUrl WHERE detailUrl = :mangaUrl")
     void updateReadingProgressSync(String mangaUrl, String chapterName, String chapterUrl);
 
+    @Query("UPDATE manga_bookshelf SET lastReadPage = :page WHERE detailUrl = :mangaUrl")
+    void updateReadingPageSync(String mangaUrl, int page);
+
+    @Query("UPDATE manga_bookshelf SET totalChapters = :count, latestChapter = :latestName WHERE detailUrl = :mangaUrl")
+    void updateChapterCountSync(String mangaUrl, int count, String latestName);
+
     @Delete
     void deleteMangaSync(MangaEntity manga);
 }
