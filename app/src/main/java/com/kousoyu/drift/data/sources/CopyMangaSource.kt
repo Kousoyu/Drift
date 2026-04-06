@@ -2,6 +2,7 @@ package com.kousoyu.drift.data.sources
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.util.Base64
 import android.util.Log
 import com.kousoyu.drift.data.HttpEngine
 import com.kousoyu.drift.data.Manga
@@ -85,10 +86,19 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
      */
     suspend fun login(username: String, password: String): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
+            // CopyManga login protocol:
+            // salt = random 6-digit int
+            // password = Base64("rawPassword-salt")
+            val salt = (100000..999999).random()
+            val encodedPassword = Base64.encodeToString(
+                "$password-$salt".toByteArray(Charsets.UTF_8),
+                Base64.NO_WRAP
+            )
+
             val body = FormBody.Builder()
                 .add("username", username)
-                .add("password", password)
-                .add("salt", System.currentTimeMillis().toString())
+                .add("password", encodedPassword)
+                .add("salt", salt.toString())
                 .build()
 
             // Use a no-redirect client to prevent POST->301->GET->HTML
@@ -97,9 +107,10 @@ class CopyMangaSource(private val client: OkHttpClient, context: Context? = null
                 .followSslRedirects(false)
                 .build()
 
+            // Correct login endpoint: /api/kb/web/login (NOT /api/v3/login)
             val loginMirrors = listOf(
-                "https://api.mangacopy.com/api/v3/login",
-                "https://api.2026copy.com/api/v3/login"
+                "https://api.mangacopy.com/api/kb/web/login",
+                "https://api.2026copy.com/api/kb/web/login"
             )
 
             var lastError: Exception = Exception("No login mirrors")
