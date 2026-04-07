@@ -30,11 +30,6 @@ class LinovelibSource(
 
     private val cfBypass = CloudflareBypass(context.applicationContext)
 
-    // ─── Pre-warm ───────────────────────────────────────────────────────────
-
-    /** Pre-solve Cloudflare so novel tab loads instantly. */
-    suspend fun preWarm() = cfBypass.preWarm(baseUrl)
-
     // ─── WebView-based fetch ────────────────────────────────────────────────
 
     private suspend fun fetch(path: String): String {

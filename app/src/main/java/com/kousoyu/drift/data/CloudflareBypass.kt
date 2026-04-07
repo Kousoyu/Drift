@@ -6,17 +6,17 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Cloudflare bypass via Android WebView — fetches fully rendered HTML.
+ * Cloudflare bypass via Android WebView.
  *
- * Optimizations:
- *   - WebView is pre-warmed and reused (not created per request)
- *   - HTML cache avoids redundant fetches within a session
- *   - Images blocked for faster page loads
- *   - Challenge detection skips extraction until CF is passed
+ * Design: creates a fresh WebView per request (reliable),
+ * but caches results to avoid redundant fetches.
+ * A Mutex serializes requests to prevent resource contention.
  */
 class CloudflareBypass(private val context: Context) {
 
@@ -26,127 +26,113 @@ class CloudflareBypass(private val context: Context) {
                 "Chrome/124.0.0.0 Mobile Safari/537.36"
     }
 
-    // ── Reusable WebView — created once, reused across fetches ──
-    private var webView: WebView? = null
-    private var isWarmedUp = false
+    // Serialize WebView requests — only one at a time
+    private val mutex = Mutex()
 
-    // ── Simple in-memory cache — avoids re-fetching during a session ──
-    private val htmlCache = LinkedHashMap<String, CacheEntry>(16, 0.75f, true)
-    private val CACHE_TTL_MS = 5 * 60 * 1000L  // 5 minutes
+    // In-memory HTML cache
+    private val cache = LinkedHashMap<String, CacheEntry>(16, 0.75f, true)
+    private val CACHE_TTL = 5 * 60 * 1000L  // 5 min
     private val MAX_CACHE = 20
 
-    private data class CacheEntry(val html: String, val timestamp: Long)
+    private data class CacheEntry(val html: String, val time: Long)
 
     /**
-     * Pre-warm the WebView by loading the base URL.
-     * Call this early (e.g. on app start) so Cloudflare is solved
-     * before the user opens the novel tab.
+     * Fetch rendered HTML. Uses cache if fresh, otherwise loads via WebView.
      */
-    suspend fun preWarm(baseUrl: String) {
-        if (isWarmedUp) return
-        withContext(Dispatchers.Main) {
-            ensureWebView()
-            val deferred = CompletableDeferred<Unit>()
-            webView!!.webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView, url: String?) {
-                    super.onPageFinished(view, url)
-                    if (!isChallengePage(view.title ?: "")) {
-                        isWarmedUp = true
-                        if (!deferred.isCompleted) deferred.complete(Unit)
-                    }
-                }
-            }
-            webView!!.loadUrl(baseUrl)
-            withTimeoutOrNull(20_000L) { deferred.await() }
-        }
-    }
-
-    /**
-     * Fetch fully rendered HTML of [url].
-     * Uses cache if available, otherwise loads via WebView.
-     */
-    suspend fun fetchHtml(url: String, timeoutMs: Long = 25_000L): String {
-        // Check cache first
-        val cached = htmlCache[url]
-        if (cached != null && System.currentTimeMillis() - cached.timestamp < CACHE_TTL_MS) {
-            return cached.html
+    suspend fun fetchHtml(url: String, timeoutMs: Long = 30_000L): String {
+        // Cache hit
+        cache[url]?.let { entry ->
+            if (System.currentTimeMillis() - entry.time < CACHE_TTL) return entry.html
         }
 
-        val html = withContext(Dispatchers.Main) {
-            ensureWebView()
-            val deferred = CompletableDeferred<String>()
-            var settled = false
-
-            webView!!.webViewClient = object : WebViewClient() {
-                override fun onPageFinished(view: WebView, finishedUrl: String?) {
-                    super.onPageFinished(view, finishedUrl)
-                    if (isChallengePage(view.title ?: "")) return
-                    if (settled) return
-                    settled = true
-
-                    view.evaluateJavascript(
-                        "(function(){return document.documentElement.outerHTML;})()"
-                    ) { rawJs ->
-                        val result = unescapeJs(rawJs)
-                        if (!deferred.isCompleted) deferred.complete(result)
-                    }
-                }
+        // Serialize WebView operations
+        val html = mutex.withLock {
+            // Double-check cache after acquiring lock
+            cache[url]?.let { entry ->
+                if (System.currentTimeMillis() - entry.time < CACHE_TTL) return@withLock entry.html
             }
 
-            webView!!.loadUrl(url)
-            withTimeoutOrNull(timeoutMs) { deferred.await() }
-                ?: throw Exception("页面加载超时")
+            withContext(Dispatchers.Main) {
+                loadViaWebView(url, timeoutMs)
+            }
         }
 
-        // Store in cache
-        if (html.length > 100) {
-            if (htmlCache.size >= MAX_CACHE) {
-                htmlCache.remove(htmlCache.keys.first())
-            }
-            htmlCache[url] = CacheEntry(html, System.currentTimeMillis())
+        // Validate — don't cache Cloudflare challenge pages
+        if (isCloudflareHtml(html)) {
+            throw Exception("Cloudflare 验证未通过，请稍后重试")
+        }
+
+        // Cache valid HTML
+        if (html.length > 200) {
+            if (cache.size >= MAX_CACHE) cache.remove(cache.keys.first())
+            cache[url] = CacheEntry(html, System.currentTimeMillis())
         }
 
         return html
     }
 
-    /**
-     * Invalidate cache for a specific URL or all.
-     */
-    fun clearCache(url: String? = null) {
-        if (url != null) htmlCache.remove(url) else htmlCache.clear()
-    }
+    fun clearCache() = cache.clear()
+
+    // ─── Internal ───────────────────────────────────────────────────────────
 
     @SuppressLint("SetJavaScriptEnabled")
-    private fun ensureWebView() {
-        if (webView == null) {
-            webView = WebView(context).apply {
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.userAgentString = UA
-                settings.loadWithOverviewMode = true
-                settings.useWideViewPort = true
-                settings.blockNetworkImage = true  // Speed: skip images
+    private suspend fun loadViaWebView(url: String, timeoutMs: Long): String {
+        val deferred = CompletableDeferred<String>()
+
+        val wv = WebView(context).apply {
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            settings.userAgentString = UA
+            settings.blockNetworkImage = true  // Speed: skip images
+        }
+
+        var settled = false
+
+        wv.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView, finishedUrl: String?) {
+                super.onPageFinished(view, finishedUrl)
+                val title = view.title ?: ""
+
+                // Still on Cloudflare challenge — wait for auto-solve
+                if (isChallengePage(title)) return
+                if (settled) return
+                settled = true
+
+                view.evaluateJavascript(
+                    "(function(){return document.documentElement.outerHTML;})()"
+                ) { raw ->
+                    if (!deferred.isCompleted) {
+                        deferred.complete(unescapeJs(raw))
+                    }
+                }
             }
         }
+
+        wv.loadUrl(url)
+
+        val result = withTimeoutOrNull(timeoutMs) { deferred.await() }
+
+        wv.stopLoading()
+        wv.destroy()
+
+        return result ?: throw Exception("加载超时 (${timeoutMs / 1000}s) — 可能需要重试")
     }
 
-    private fun isChallengePage(title: String): Boolean {
-        return "Just a moment" in title ||
-               "请稍候" in title ||
-               "Checking" in title ||
-               "Attention Required" in title
-    }
+    private fun isChallengePage(title: String): Boolean =
+        "Just a moment" in title || "请稍候" in title ||
+        "Checking" in title || "Attention Required" in title
+
+    private fun isCloudflareHtml(html: String): Boolean =
+        html.length < 500 || "cf-challenge" in html ||
+        ("Just a moment" in html && "challenge-platform" in html)
 
     private fun unescapeJs(raw: String): String {
         if (raw == "null" || raw.isBlank()) return ""
         var s = raw
-        if (s.startsWith("\"") && s.endsWith("\"")) {
-            s = s.substring(1, s.length - 1)
-        }
+        if (s.startsWith("\"") && s.endsWith("\"")) s = s.substring(1, s.length - 1)
         return s.replace("\\\"", "\"")
             .replace("\\/", "/")
-            .replace("\\n", "\n")
-            .replace("\\t", "\t")
+            .replace("\\n", "\n").replace("\\t", "\t")
             .replace("\\u003C", "<").replace("\\u003c", "<")
             .replace("\\u003E", ">").replace("\\u003e", ">")
             .replace("\\u0026", "&")
