@@ -13,6 +13,7 @@ import androidx.compose.material.icons.automirrored.filled.MenuBook
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -63,6 +64,9 @@ class MainActivity : ComponentActivity() {
 
         // ── Initialize source manager with app context ──
         SourceManager.init(this)
+
+        // ── Initialize auth cache (instant profile restore) ──
+        com.kousoyu.drift.data.AuthManager.initialize(applicationContext)
 
         // ── Coil: 256MB disk cache for instant re-reads ──
         Coil.setImageLoader(
@@ -309,13 +313,11 @@ fun DriftApp(
     onThemeChange: (ThemeMode) -> Unit,
     updateManager: UpdateManager? = null
 ) {
-    var selectedIndex by remember { mutableIntStateOf(0) }
-    val tabs  = listOf("漫画", "小说", "追番", "AI 助手", "我")
+    var selectedIndex by rememberSaveable { mutableIntStateOf(0) }
+    val tabs  = listOf("漫画", "小说", "我")
     val icons = listOf(
         Icons.AutoMirrored.Filled.MenuBook,
         Icons.Filled.Book,
-        Icons.Filled.SlowMotionVideo,
-        Icons.Filled.AutoAwesome,
         Icons.Filled.Person
     )
 
@@ -359,14 +361,13 @@ fun DriftApp(
                     onNavigateToSearch   = { navController.navigate(DriftRoutes.SEARCH) },
                     onNavigateToDetail   = { url, src -> navController.navigate(DriftRoutes.createDetailRoute(url, src)) }
                 )
-                4 -> ProfileScreen(
+                1 -> NovelScreen()
+                2 -> ProfileScreen(
                     currentTheme  = currentTheme,
                     onThemeChange = onThemeChange,
                     onNavigateToEdit = { navController.navigate(DriftRoutes.PROFILE_EDIT) },
                     updateManager = updateManager
                 )
-
-                else -> ComingSoonScreen(label = tabs[selectedIndex])
             }
         }
     }

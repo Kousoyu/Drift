@@ -95,3 +95,17 @@
     java.lang.Object writeReplace();
     java.lang.Object readResolve();
 }
+
+# ─── Supabase + Ktor + kotlinx.serialization ──────────────────────────────────
+-keep class io.github.jan.supabase.** { *; }
+-dontwarn io.github.jan.supabase.**
+-keep class io.ktor.** { *; }
+-dontwarn io.ktor.**
+-keep class kotlinx.serialization.** { *; }
+-dontwarn kotlinx.serialization.**
+-keepattributes *Annotation*, InnerClasses
+-keepclassmembers class kotlinx.serialization.json.** { *** Companion; }
+-keepclasseswithmembers class kotlinx.serialization.json.** {
+    kotlinx.serialization.KSerializer serializer(...);
+}
+-keep class com.kousoyu.drift.data.DriftSupabase { *; }

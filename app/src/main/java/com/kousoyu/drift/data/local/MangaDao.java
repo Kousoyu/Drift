@@ -37,4 +37,7 @@ public interface MangaDao {
 
     @Delete
     void deleteMangaSync(MangaEntity manga);
+
+    @Query("SELECT COUNT(*) FROM manga_bookshelf")
+    Flow<Integer> getFavoriteCount();
 }

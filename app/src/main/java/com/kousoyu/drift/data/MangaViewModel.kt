@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
@@ -43,12 +44,15 @@ class MangaViewModel(app: Application) : AndroidViewModel(app) {
     private val _searchState = MutableStateFlow<MangaListState?>(null)
     val searchState: StateFlow<MangaListState?> = _searchState
 
+    private var loadJob: Job? = null
+
     init {
         loadPopular()
     }
 
     fun loadPopular() {
-        viewModelScope.launch {
+        loadJob?.cancel()
+        loadJob = viewModelScope.launch {
             val src = currentSource.value
             val cacheFile = File(getApplication<Application>().cacheDir, "popular_manga_cache_${src.name}.json")
 

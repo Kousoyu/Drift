@@ -27,6 +27,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kousoyu.drift.data.AuthState
+import com.kousoyu.drift.data.UsernameCheckState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -44,6 +45,7 @@ fun LoginSheet(
     val email by vm.emailInput.collectAsState()
     val password by vm.passwordInput.collectAsState()
     val nickname by vm.nicknameInput.collectAsState()
+    val inviteCode by vm.inviteCodeInput.collectAsState()
     val loginError by vm.loginError.collectAsState()
     val focusManager = LocalFocusManager.current
 
@@ -98,12 +100,15 @@ fun LoginSheet(
 
             Spacer(Modifier.height(36.dp))
 
-            // ─── Nickname field (register mode only) ────────────────────────
+            // ─── Register-only fields ────────────────────────────────────
             AnimatedVisibility(
                 visible = isRegisterMode,
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
+                val regUsername by vm.regUsernameInput.collectAsState()
+                val usernameCheck by vm.regUsernameCheckState.collectAsState()
+
                 Column {
                     MinimalTextField(
                         value = nickname,
@@ -113,16 +118,64 @@ fun LoginSheet(
                         keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) })
                     )
                     Spacer(Modifier.height(20.dp))
+                    MinimalTextField(
+                        value = regUsername,
+                        onValueChange = vm::setRegUsername,
+                        placeholder = "用户名（唯一 ID）",
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) }),
+                        trailingIcon = {
+                            UsernameCheckIcon(state = usernameCheck)
+                        }
+                    )
+                    // Username check hint
+                    if (regUsername.isNotBlank()) {
+                        Spacer(Modifier.height(4.dp))
+                        AnimatedContent(
+                            targetState = usernameCheck,
+                            transitionSpec = { fadeIn() togetherWith fadeOut() },
+                            label = "regUsernameCheck"
+                        ) { check ->
+                            when (check) {
+                                is UsernameCheckState.Checking -> Text(
+                                    "检查中...", fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                )
+                                is UsernameCheckState.Available -> Text(
+                                    "@$regUsername 可以使用", fontSize = 11.sp,
+                                    color = Color(0xFF34C759)
+                                )
+                                is UsernameCheckState.Taken -> Text(
+                                    check.message, fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                is UsernameCheckState.Invalid -> Text(
+                                    check.message, fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.error
+                                )
+                                else -> Spacer(Modifier.height(0.dp))
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(20.dp))
+                    MinimalTextField(
+                        value = inviteCode,
+                        onValueChange = vm::setInviteCode,
+                        placeholder = "邀请码",
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                        keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) })
+                    )
+                    Spacer(Modifier.height(20.dp))
                 }
             }
 
-            // ─── Email ──────────────────────────────────────────────────────
+            // ─── Email / Username ─────────────────────────────────────────
             MinimalTextField(
                 value = email,
                 onValueChange = vm::setEmail,
-                placeholder = "邮箱",
+                placeholder = if (isRegisterMode) "邮箱" else "邮箱 / 用户名",
                 keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Email,
+                    keyboardType = if (isRegisterMode) KeyboardType.Email else KeyboardType.Text,
                     imeAction = ImeAction.Next
                 ),
                 keyboardActions = KeyboardActions(onNext = { focusManager.moveFocus(FocusDirection.Down) })
@@ -166,11 +219,11 @@ fun LoginSheet(
                 enter = fadeIn() + expandVertically(),
                 exit = fadeOut() + shrinkVertically()
             ) {
-                Spacer(Modifier.height(12.dp))
                 Text(
                     text = loginError ?: "",
                     fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.error
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(top = 12.dp)
                 )
             }
 
@@ -250,6 +303,8 @@ fun LoginSheet(
             Spacer(Modifier.height(24.dp))
 
             // ─── Third-party Buttons ──────────────────────────────────────────
+            var showComingSoon by remember { mutableStateOf<String?>(null) }
+
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -260,7 +315,7 @@ fun LoginSheet(
                     enabled = !isLoading,
                     onClick = {
                         focusManager.clearFocus()
-                        vm.loginWithQQ()
+                        showComingSoon = "QQ 登录即将开放，敬请期待 ✨"
                     }
                 )
                 OAuthButton(
@@ -269,9 +324,27 @@ fun LoginSheet(
                     enabled = !isLoading,
                     onClick = {
                         focusManager.clearFocus()
-                        vm.loginWithWeChat()
+                        showComingSoon = "微信登录即将开放，敬请期待 ✨"
                     }
                 )
+            }
+
+            // ─── Coming Soon Hint ────────────────────────────────────────────
+            AnimatedVisibility(
+                visible = showComingSoon != null,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically()
+            ) {
+                Column {
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        text = showComingSoon ?: "",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                    )
+                }
             }
         }
     }

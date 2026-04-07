@@ -31,7 +31,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.AsyncImage
+import androidx.compose.ui.graphics.asImageBitmap
 import com.kousoyu.drift.data.AuthState
 import com.kousoyu.drift.data.DriftUser
 import com.kousoyu.drift.data.UsernameCheckState
@@ -47,7 +47,8 @@ fun ProfileEditScreen(
     val user = (authState as? AuthState.LoggedIn)?.user
 
     // Initialize form state when user is available
-    LaunchedEffect(user) {
+    // 仅在用户切换时初始化表单（不因 profile 更新而覆盖编辑中的内容）
+    LaunchedEffect(user?.uid) {
         if (user != null) vm.initEditState(user)
     }
 
@@ -59,8 +60,9 @@ fun ProfileEditScreen(
     val editUsername by vm.editUsernameInput.collectAsState()
     val editNickname by vm.editNicknameInput.collectAsState()
     val editAvatarUrl by vm.editAvatarUrl.collectAsState()
-    val usernameCheck by vm.usernameCheckState.collectAsState()
+    val usernameCheck by vm.editUsernameCheckState.collectAsState()
     val saveResult by vm.saveResult.collectAsState()
+    val isSaving by vm.isSaving.collectAsState()
 
     // Photo picker for custom avatars
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -70,14 +72,33 @@ fun ProfileEditScreen(
         }
     )
 
-    // Show save result snackbar
+    // 保存结果处理：成功立即返回，失败显示 snackbar
     val snackbarHostState = remember { SnackbarHostState() }
     LaunchedEffect(saveResult) {
         saveResult?.let {
-            snackbarHostState.showSnackbar(it, duration = SnackbarDuration.Short)
             vm.clearSaveResult()
-            if (it.startsWith("✓")) onBack()
+            if (it.startsWith("✓")) {
+                onBack()  // 立即返回，不等 snackbar
+            } else {
+                snackbarHostState.showSnackbar(it, duration = SnackbarDuration.Short)
+            }
         }
+    }
+
+    // ── 未保存修改检测 ──
+    val isDirty = remember(editUsername, editNickname, editAvatarUrl) {
+        user != null && (
+            editUsername != user.username ||
+            editNickname != user.nickname ||
+            editAvatarUrl != user.avatarUrl
+        )
+    }
+    var showDiscardDialog by remember { mutableStateOf(false) }
+    val safeBack = { if (isDirty) showDiscardDialog = true else onBack() }
+
+    // 拦截系统返回手势 / 返回键
+    androidx.activity.compose.BackHandler(enabled = isDirty) {
+        showDiscardDialog = true
     }
 
     Scaffold(
@@ -96,7 +117,7 @@ fun ProfileEditScreen(
             // ─── Top bar ────────────────────────────────────────────────────
             Row(verticalAlignment = Alignment.CenterVertically) {
                 IconButton(
-                    onClick = onBack,
+                    onClick = safeBack,
                     modifier = Modifier.size(36.dp)
                 ) {
                     Icon(
@@ -109,14 +130,31 @@ fun ProfileEditScreen(
                 Spacer(Modifier.weight(1f))
                 TextButton(
                     onClick = vm::saveProfile,
+                    enabled = !isSaving && isDirty,
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
                 ) {
-                    Text(
-                        "保存",
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onBackground
-                    )
+                    if (isSaving) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "保存中",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    } else {
+                        Text(
+                            "保存",
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = if (isDirty) MaterialTheme.colorScheme.onBackground
+                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                        )
+                    }
                 }
             }
 
@@ -160,25 +198,6 @@ fun ProfileEditScreen(
             }
 
             Spacer(Modifier.height(10.dp))
-
-            // ─── Avatar URL input ─────────────────────────────────────────────
-            Text(
-                text = "头像 URL",
-                fontSize = 11.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                letterSpacing = 0.8.sp
-            )
-            Spacer(Modifier.height(10.dp))
-            MinimalTextField(
-                value = editAvatarUrl,
-                onValueChange = vm::setEditAvatarUrl,
-                placeholder = "https://... 或留空使用文字头像",
-                keyboardOptions = KeyboardOptions(
-                    keyboardType = KeyboardType.Uri,
-                    imeAction = ImeAction.Next
-                )
-            )
 
             Spacer(Modifier.height(32.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.outline, thickness = 0.5.dp)
@@ -281,6 +300,25 @@ fun ProfileEditScreen(
             )
         }
     }
+
+    // ─── 未保存修改确认弹窗 ─────────────────────────────────────────────────
+    if (showDiscardDialog) {
+        AlertDialog(
+            onDismissRequest = { showDiscardDialog = false },
+            title = { Text("放弃修改？", fontWeight = FontWeight.Bold) },
+            text = { Text("你有未保存的修改，确定要离开吗？", fontSize = 14.sp) },
+            confirmButton = {
+                TextButton(onClick = { showDiscardDialog = false; onBack() }) {
+                    Text("离开", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDiscardDialog = false }) {
+                    Text("继续编辑")
+                }
+            }
+        )
+    }
 }
 
 // ─── Username check trailing icon ─────────────────────────────────────────────
@@ -316,6 +354,7 @@ fun AvatarDisplay(
     size: Int = 52,
     fontSize: Int = 20
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
     val colors = listOf(
         Color(0xFF6C5CE7),
         Color(0xFF00B894),
@@ -326,29 +365,84 @@ fun AvatarDisplay(
     val colorIndex = (nickname.firstOrNull()?.code ?: 0) % colors.size
     val bgColor = colors[colorIndex]
 
-    if (avatarUrl.isNotEmpty()) {
-        AsyncImage(
-            model = avatarUrl,
-            contentDescription = nickname,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier
-                .size(size.dp)
-                .clip(CircleShape)
-        )
-    } else {
-        Box(
-            modifier = Modifier
-                .size(size.dp)
-                .clip(CircleShape)
-                .background(bgColor),
-            contentAlignment = Alignment.Center
-        ) {
-            Text(
-                text = (nickname.firstOrNull() ?: "?").toString().uppercase(),
-                fontSize = fontSize.sp,
-                fontWeight = FontWeight.Bold,
-                color = Color.White
+    // ── 优先从本地文件同步加载（仅限远程 URL，本地 URI 直接预览）──
+    val isRemoteUrl = avatarUrl.startsWith("http")
+    val avatarReady by com.kousoyu.drift.data.AuthManager.avatarReady.collectAsState()
+    val localFile = remember { com.kousoyu.drift.data.ProfileRepository.getLocalAvatarFile(context) }
+    val localBitmap = remember(avatarUrl, avatarReady) {
+        if (isRemoteUrl && localFile.exists() && avatarUrl.isNotEmpty()) {
+            try {
+                android.graphics.BitmapFactory.decodeFile(localFile.absolutePath)
+                    ?.asImageBitmap()
+            } catch (_: Exception) { null }
+        } else null
+    }
+
+    when {
+        // 本地缓存命中 → 同步渲染
+        localBitmap != null -> {
+            androidx.compose.foundation.Image(
+                bitmap = localBitmap,
+                contentDescription = nickname,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(size.dp)
+                    .clip(CircleShape)
             )
+        }
+        // 有 URL 但无本地缓存 → 异步加载
+        avatarUrl.isNotEmpty() -> {
+            coil.compose.SubcomposeAsyncImage(
+                model = avatarUrl,
+                contentDescription = nickname,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .size(size.dp)
+                    .clip(CircleShape),
+                loading = {
+                    Box(
+                        modifier = Modifier.fillMaxSize().background(bgColor),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = (nickname.firstOrNull() ?: "?").toString().uppercase(),
+                            fontSize = fontSize.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                },
+                error = {
+                    Box(
+                        modifier = Modifier.fillMaxSize().background(bgColor),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = (nickname.firstOrNull() ?: "?").toString().uppercase(),
+                            fontSize = fontSize.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    }
+                }
+            )
+        }
+        // 无头像 → 首字母
+        else -> {
+            Box(
+                modifier = Modifier
+                    .size(size.dp)
+                    .clip(CircleShape)
+                    .background(bgColor),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = (nickname.firstOrNull() ?: "?").toString().uppercase(),
+                    fontSize = fontSize.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White
+                )
+            }
         }
     }
 }

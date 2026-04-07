@@ -203,11 +203,15 @@ fun MangaScreen(
 
     // Cached images — keep last successful list visible during refresh
     val lastSuccessItems = remember { mutableStateOf<List<Manga>>(emptyList()) }
-    val isRefreshing = popularState is MangaListState.Loading && lastSuccessItems.value.isNotEmpty()
+    var isPullRefreshing by remember { mutableStateOf(false) }
 
     LaunchedEffect(popularState) {
         if (popularState is MangaListState.Success) {
             lastSuccessItems.value = (popularState as MangaListState.Success).items
+            isPullRefreshing = false  // 数据到达 → 刷新完成
+        }
+        if (popularState is MangaListState.Error) {
+            isPullRefreshing = false  // 出错也要结束刷新动画
         }
     }
 
@@ -228,13 +232,22 @@ fun MangaScreen(
                 )
             }
 
-            // Success or refreshing (with data) — show full UI
+            // Success or refreshing (with data) — show full UI with pull-to-refresh
             else -> {
                 val displayItems = if (popularState is MangaListState.Success) {
                     (popularState as MangaListState.Success).items
                 } else {
                     lastSuccessItems.value
                 }
+
+                androidx.compose.material3.pulltorefresh.PullToRefreshBox(
+                    isRefreshing = isPullRefreshing,
+                    onRefresh = {
+                        isPullRefreshing = true
+                        viewModel.loadPopular()
+                    },
+                    modifier = Modifier.fillMaxSize()
+                ) {
 
                 val heroBanners = listOf(
                     Manga(
@@ -316,7 +329,7 @@ fun MangaScreen(
                         }
                     }
 
-                    item { SectionHeader(title = "最近在追", actionLabel = "更多 →") }
+                    item { SectionHeader(title = "热门推荐") }
                     item {
                         RealHorizontalList(
                             items = recentManga,
@@ -342,29 +355,11 @@ fun MangaScreen(
                         Spacer(modifier = Modifier.height(24.dp))
                     }
                 }
+                }  // PullToRefreshBox
             }
         }
 
-        // ── Slim top loading indicator when refreshing with existing data ──
-        val loaderTopInset = androidx.compose.foundation.layout.WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-        val tightLoaderTop = androidx.compose.ui.unit.max(0.dp, loaderTopInset - 26.dp)
 
-        AnimatedVisibility(
-            visible = isRefreshing,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .padding(top = tightLoaderTop),
-            enter = fadeIn(),
-            exit = fadeOut()
-        ) {
-            LinearProgressIndicator(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(2.dp),
-                color = MaterialTheme.colorScheme.primary,
-                trackColor = Color.Transparent
-            )
-        }
 
         // ── Smart Scroll-to-Top FAB ──
         AnimatedVisibility(
@@ -491,7 +486,7 @@ fun TopHeader(
     onSearchClick: () -> Unit,
     onExploreClick: () -> Unit
 ) {
-    val hour = remember { Calendar.getInstance().get(Calendar.HOUR_OF_DAY) }
+    val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
     val greeting = when {
         hour < 6  -> "夜深了，别忘了休息"
         hour < 12 -> "早上好，来看看今日更新"
@@ -723,7 +718,7 @@ fun RealHeroBannerPager(
     ) {
         HorizontalPager(state = pagerState, modifier = Modifier.fillMaxSize()) { page ->
             val manga = items[page]
-            Box(modifier = Modifier.fillMaxSize().clickable { onNavigateToDetail(manga.detailUrl, manga.sourceName) }) {
+            Box(modifier = Modifier.fillMaxSize()) {
                 // Background blur
                 AsyncImage(
                     model = ImageRequest.Builder(context)
@@ -1028,7 +1023,7 @@ fun RealBookGrid(
 // ─── Section Header ───────────────────────────────────────────────────────────
 
 @Composable
-fun SectionHeader(title: String, actionLabel: String?) {
+fun SectionHeader(title: String, actionLabel: String? = null) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -1094,7 +1089,7 @@ fun FooterNoticeRow(onNavigateToNotice: () -> Unit = {}) {
     }
     Spacer(modifier = Modifier.height(12.dp))
     Text(
-        text = "Drift 不存储任何版权内容，仅作聚合导航用途。\n© 2025 Drift Project · 开源 · 无广告",
+        text = "Drift 不存储任何版权内容，仅作聚合导航用途。\n© ${java.time.Year.now().value} Drift Project · 开源 · 无广告",
         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
         fontSize = 10.sp,
         lineHeight = 15.sp,

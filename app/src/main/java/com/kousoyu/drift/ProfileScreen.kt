@@ -2,6 +2,7 @@ package com.kousoyu.drift
 
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -36,17 +37,41 @@ fun ProfileScreen(
     updateManager: UpdateManager? = null
 ) {
     val vm: AuthViewModel = viewModel()
+    val profileVm: ProfileViewModel = viewModel()
     val authState by vm.authState.collectAsState()
     val updateState = updateManager?.updateState?.collectAsState()
     val coroutineScope = rememberCoroutineScope()
 
+    // ── Live data from ProfileViewModel ─────────────────────────────────
+    val favoriteCount by profileVm.favoriteCount.collectAsState()
+    val cacheSize by profileVm.cacheSize.collectAsState()
+
+    // 每次页面可见时刷新缓存大小
+    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                profileVm.refreshCacheSize()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val snackbarHostState = remember { SnackbarHostState() }
     var showLogin by remember { mutableStateOf(false) }
+    var showLogoutConfirm by remember { mutableStateOf(false) }
 
     val scrollState = rememberScrollState()
 
+    Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        containerColor = Color.Transparent
+    ) { scaffoldPadding ->
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .padding(scaffoldPadding)
             .verticalScroll(scrollState)
             .padding(horizontal = 28.dp)
             .padding(top = 56.dp, bottom = 40.dp)
@@ -85,11 +110,44 @@ fun ProfileScreen(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(0.dp)
         ) {
-            StatBlock(value = "12", label = "漫画", modifier = Modifier.weight(1f))
+            StatBlock(value = "$favoriteCount", label = "漫画", modifier = Modifier.weight(1f))
             StatDivider()
-            StatBlock(value = "8",  label = "小说", modifier = Modifier.weight(1f))
+            StatBlock(value = "0", label = "小说", modifier = Modifier.weight(1f))
             StatDivider()
-            StatBlock(value = "1.2 G", label = "缓存", modifier = Modifier.weight(1f))
+            StatBlock(value = "0", label = "追番", modifier = Modifier.weight(1f))
+        }
+
+        // ─── Cache Row ───────────────────────────────────────────────────────
+        Spacer(modifier = Modifier.height(20.dp))
+        Surface(
+            onClick = {
+                profileVm.clearCache()
+                coroutineScope.launch {
+                    snackbarHostState.showSnackbar("缓存已清理 ✓", duration = SnackbarDuration.Short)
+                }
+            },
+            shape = MaterialTheme.shapes.small,
+            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "图片缓存",
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onBackground
+                )
+                Text(
+                    text = cacheSize,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(40.dp))
@@ -119,7 +177,7 @@ fun ProfileScreen(
         ) {
             Column {
                 TextButton(
-                    onClick = vm::logout,
+                    onClick = { showLogoutConfirm = true },
                     contentPadding = PaddingValues(0.dp)
                 ) {
                     Text(
@@ -220,7 +278,7 @@ fun ProfileScreen(
 
         Spacer(modifier = Modifier.height(60.dp))
         Text(
-            text = "Drift · 游离\n© 2025 Drift Project",
+            text = "Drift · 游离\n© ${java.util.Calendar.getInstance().get(java.util.Calendar.YEAR)} Drift Project",
             fontSize = 10.sp,
             lineHeight = 16.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f),
@@ -228,12 +286,32 @@ fun ProfileScreen(
             modifier = Modifier.fillMaxWidth()
         )
     }
+    } // end Scaffold
 
     // ─── Login Bottom Sheet ────────────────────────────────────────────────────
     if (showLogin) {
         LoginSheet(
             vm = vm,
-            onDismiss = { showLogin = false }
+            onDismiss = { showLogin = false; vm.resetLoginForm() }
+        )
+    }
+
+    // ─── 退出登录确认弹窗 ─────────────────────────────────────────────────
+    if (showLogoutConfirm) {
+        AlertDialog(
+            onDismissRequest = { showLogoutConfirm = false },
+            title = { Text("退出登录", fontWeight = FontWeight.Bold) },
+            text = { Text("确定要退出当前账号吗？", fontSize = 14.sp) },
+            confirmButton = {
+                TextButton(onClick = { showLogoutConfirm = false; vm.logout() }) {
+                    Text("退出", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showLogoutConfirm = false }) {
+                    Text("取消")
+                }
+            }
         )
     }
 }
@@ -361,11 +439,15 @@ fun StatDivider() {
 
 @Composable
 fun ThemeSelectorRow(currentTheme: ThemeMode, onThemeChange: (ThemeMode) -> Unit) {
+    val haptic = androidx.compose.ui.platform.LocalHapticFeedback.current
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         listOf(ThemeMode.SYSTEM, ThemeMode.DARK, ThemeMode.LIGHT).forEach { mode ->
             val isSelected = mode == currentTheme
             Surface(
-                onClick = { onThemeChange(mode) },
+                onClick = {
+                    haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
+                    onThemeChange(mode)
+                },
                 modifier = Modifier.weight(1f),
                 shape = MaterialTheme.shapes.small,
                 color = if (isSelected) MaterialTheme.colorScheme.onBackground
