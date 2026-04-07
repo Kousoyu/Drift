@@ -6,16 +6,17 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -24,103 +25,43 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import com.kousoyu.drift.data.NovelItem
+import com.kousoyu.drift.data.NovelSourceManager
+import com.kousoyu.drift.data.NovelViewModel
 import kotlinx.coroutines.launch
 import java.util.Calendar
-
-// ─── Data Model ──────────────────────────────────────────────────────────────
-
-data class Novel(
-    val title: String,
-    val author: String,
-    val genre: String = "",
-    val wordCount: String = "",
-    val status: String = "",      // 连载中 / 已完结
-    val description: String = "",
-    val quote: String = "",       // 精选句子
-    val coverUrl: String = ""
-)
-
-// ─── Demo Data ───────────────────────────────────────────────────────────────
-
-private val demoNovels = listOf(
-    Novel(
-        title = "诡秘之主",
-        author = "爱潜水的乌贼",
-        genre = "玄幻",
-        wordCount = "469万字",
-        status = "已完结",
-        description = "蒸汽与机械的浪潮中，谁能触及非凡？",
-        quote = "\"每个人都是自己人生的主角，但不是每个人都能控制剧本。\""
-    ),
-    Novel(
-        title = "凡人修仙传",
-        author = "忘语",
-        genre = "仙侠",
-        wordCount = "746万字",
-        status = "已完结",
-        description = "一个普通少年的修仙之路，从山村到星海。"
-    ),
-    Novel(
-        title = "大奉打更人",
-        author = "卖报小郎君",
-        genre = "古典仙侠",
-        wordCount = "423万字",
-        status = "已完结",
-        description = "身穿大奉王朝，从一介打更人到庙堂之高。"
-    ),
-    Novel(
-        title = "家族修仙：我打造万年世家",
-        author = "万年天帝",
-        genre = "玄幻",
-        wordCount = "280万字",
-        status = "连载中",
-        description = "穿越修仙世界，一代代经营，铸就万古家族。"
-    ),
-    Novel(
-        title = "深空彼岸",
-        author = "辰东",
-        genre = "科幻",
-        wordCount = "350万字",
-        status = "连载中",
-        description = "星空之下，人类文明向宇宙深处进发。"
-    ),
-    Novel(
-        title = "道诡异仙",
-        author = "狐尾的笔",
-        genre = "悬疑",
-        wordCount = "310万字",
-        status = "连载中",
-        description = "当修仙遇到诡异世界，细思极恐的东方异闻录。"
-    )
-)
-
-private val genreFilters = listOf("全部", "玄幻", "仙侠", "科幻", "悬疑", "都市", "历史")
 
 // ─── Novel Screen ────────────────────────────────────────────────────────────
 
 @Composable
 fun NovelScreen(
-    onNavigateToSearch: () -> Unit = {},
+    onNavigateToDetail: (String) -> Unit = {},
+    novelViewModel: NovelViewModel = viewModel()
 ) {
+    val uiState by novelViewModel.uiState.collectAsState()
+    val currentSource by novelViewModel.currentSource.collectAsState()
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
 
     val showScrollToTop by remember {
-        derivedStateOf { listState.firstVisibleItemIndex > 2 }
+        derivedStateOf { listState.firstVisibleItemIndex > 3 }
     }
 
-    var selectedGenre by remember { mutableStateOf("全部") }
-
-    val filteredNovels = if (selectedGenre == "全部") demoNovels
-                         else demoNovels.filter { it.genre == selectedGenre }
-
-    val featured = demoNovels.first()
+    // Load on first composition
+    LaunchedEffect(currentSource) {
+        novelViewModel.loadPopular()
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
@@ -131,36 +72,176 @@ fun NovelScreen(
             contentPadding = PaddingValues(bottom = 32.dp)
         ) {
             // ── Header ──
-            item { NovelHeader(onSearchClick = onNavigateToSearch) }
+            item { NovelHeader() }
 
-            // ── Featured Card ──
+            // ── Source Chip ──
             item {
-                Spacer(modifier = Modifier.height(16.dp))
-                FeaturedNovelCard(novel = featured)
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.padding(horizontal = 20.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(8.dp),
+                        color = MaterialTheme.colorScheme.primaryContainer
+                    ) {
+                        Text(
+                            text = currentSource.name,
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                        )
+                    }
+
+                    Spacer(Modifier.weight(1f))
+
+                    IconButton(
+                        onClick = { novelViewModel.refresh() },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.Refresh,
+                            contentDescription = "刷新",
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
             }
 
-            // ── Genre Filter Chips ──
-            item {
-                Spacer(modifier = Modifier.height(28.dp))
-                GenreFilterRow(
-                    genres = genreFilters,
-                    selected = selectedGenre,
-                    onSelect = { selectedGenre = it }
-                )
-            }
+            // ── Content State ──
+            when (val state = uiState) {
+                is NovelViewModel.UiState.Loading -> {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(300.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(32.dp),
+                                    strokeWidth = 2.dp,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(Modifier.height(16.dp))
+                                Text(
+                                    text = "正在连接 ${currentSource.name}...",
+                                    fontSize = 13.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                                )
+                                Text(
+                                    text = "首次加载可能需要几秒（绕过保护）",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+                                )
+                            }
+                        }
+                    }
+                }
 
-            // ── Novel List ──
-            item { Spacer(modifier = Modifier.height(8.dp)) }
-            items(filteredNovels, key = { it.title }) { novel ->
-                NovelListItem(novel = novel)
+                is NovelViewModel.UiState.Error -> {
+                    item {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(300.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = "加载失败",
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Spacer(Modifier.height(6.dp))
+                                Text(
+                                    text = state.message,
+                                    fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(horizontal = 40.dp)
+                                )
+                                Spacer(Modifier.height(16.dp))
+                                OutlinedButton(onClick = { novelViewModel.refresh() }) {
+                                    Text("重试")
+                                }
+                            }
+                        }
+                    }
+                }
+
+                is NovelViewModel.UiState.Success -> {
+                    val novels = state.novels
+
+                    if (novels.isEmpty()) {
+                        item {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(200.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "暂无数据",
+                                    fontSize = 14.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                )
+                            }
+                        }
+                    } else {
+                        // ── Featured (first item) ──
+                        val featured = novels.first()
+                        item {
+                            Spacer(modifier = Modifier.height(16.dp))
+                            FeaturedNovelCard(novel = featured, onClick = {
+                                onNavigateToDetail(featured.detailUrl)
+                            })
+                        }
+
+                        // ── Trending (horizontal scroll, top 8) ──
+                        if (novels.size > 1) {
+                            item {
+                                Spacer(modifier = Modifier.height(24.dp))
+                                NovelSectionHeader(title = "热门排行")
+                            }
+                            item {
+                                Spacer(modifier = Modifier.height(10.dp))
+                                RankingRow(
+                                    novels = novels.drop(1).take(8),
+                                    onNovelClick = onNavigateToDetail
+                                )
+                            }
+                        }
+
+                        // ── Full list ──
+                        if (novels.size > 3) {
+                            item {
+                                Spacer(modifier = Modifier.height(24.dp))
+                                NovelSectionHeader(title = "更多推荐")
+                            }
+                            item { Spacer(modifier = Modifier.height(4.dp)) }
+
+                            items(novels.drop(3), key = { it.detailUrl }) { novel ->
+                                NovelListItem(novel, onClick = {
+                                    onNavigateToDetail(novel.detailUrl)
+                                })
+                            }
+                        }
+                    }
+                }
             }
 
             // ── Footer ──
             item {
-                Spacer(modifier = Modifier.height(32.dp))
+                Spacer(modifier = Modifier.height(40.dp))
                 Text(
-                    text = "更多小说源正在接入中\n当前为演示数据",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                    text = "数据来源: ${currentSource.name}\n仅供学习交流使用",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
                     fontSize = 11.sp,
                     lineHeight = 16.sp,
                     textAlign = TextAlign.Center,
@@ -193,7 +274,7 @@ fun NovelScreen(
                 shadowElevation = 4.dp
             ) {
                 Column(
-                    modifier = Modifier.size(52.dp),
+                    modifier = Modifier.size(44.dp),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
@@ -201,15 +282,9 @@ fun NovelScreen(
                         imageVector = Icons.Default.KeyboardArrowUp,
                         contentDescription = "回到顶部",
                         tint = MaterialTheme.colorScheme.background,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(16.dp)
                     )
-                    Text(
-                        text = "TOP",
-                        color = MaterialTheme.colorScheme.background,
-                        fontSize = 9.sp,
-                        fontWeight = FontWeight.Bold,
-                        textAlign = TextAlign.Center
-                    )
+                    Text("TOP", color = MaterialTheme.colorScheme.background, fontSize = 8.sp, fontWeight = FontWeight.Bold)
                 }
             }
         }
@@ -219,7 +294,7 @@ fun NovelScreen(
 // ─── Header ──────────────────────────────────────────────────────────────────
 
 @Composable
-private fun NovelHeader(onSearchClick: () -> Unit) {
+private fun NovelHeader() {
     val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
     val greeting = when {
         hour < 6  -> "静夜好读"
@@ -236,206 +311,220 @@ private fun NovelHeader(onSearchClick: () -> Unit) {
             .fillMaxWidth()
             .padding(top = tightTop)
             .padding(horizontal = 20.dp)
-            .padding(bottom = 6.dp)
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-        ) {
-            Column {
-                Text(
-                    text = greeting,
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Normal
-                )
-                Text(
-                    text = "小说",
-                    fontSize = 26.sp,
-                    fontWeight = FontWeight.Black,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    letterSpacing = (-0.5).sp
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(14.dp))
-
-        // Search bar
-        Surface(
-            onClick = onSearchClick,
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(14.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
-        ) {
-            Row(
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Search,
-                    contentDescription = "搜索",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                    modifier = Modifier.size(18.dp)
-                )
-                Text(
-                    text = "搜索小说、作者...",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                    fontSize = 15.sp
-                )
-            }
-        }
+        Text(
+            text = greeting,
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontWeight = FontWeight.Normal
+        )
+        Text(
+            text = "小说",
+            fontSize = 26.sp,
+            fontWeight = FontWeight.Black,
+            color = MaterialTheme.colorScheme.onBackground,
+            letterSpacing = (-0.5).sp
+        )
     }
+}
+
+// ─── Section Header ──────────────────────────────────────────────────────────
+
+@Composable
+private fun NovelSectionHeader(title: String) {
+    Text(
+        text = title,
+        fontSize = 17.sp,
+        fontWeight = FontWeight.Bold,
+        color = MaterialTheme.colorScheme.onBackground,
+        modifier = Modifier.padding(horizontal = 20.dp)
+    )
 }
 
 // ─── Featured Novel Card ─────────────────────────────────────────────────────
 
 @Composable
-private fun FeaturedNovelCard(novel: Novel) {
+private fun FeaturedNovelCard(novel: NovelItem, onClick: () -> Unit) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 20.dp),
-        shape = RoundedCornerShape(18.dp),
-        color = Color.Transparent
+        shape = RoundedCornerShape(16.dp),
+        color = Color.Transparent,
+        onClick = onClick
     ) {
-        Box(
+        Row(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(
                     brush = Brush.linearGradient(
                         colors = listOf(
-                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.3f),
-                            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.2f)
+                            MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.25f),
+                            MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.15f)
                         )
                     ),
-                    shape = RoundedCornerShape(18.dp)
+                    shape = RoundedCornerShape(16.dp)
                 )
-                .padding(24.dp)
+                .padding(16.dp),
+            horizontalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            Column {
-                // Genre + Status tag
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                    ) {
-                        Text(
-                            text = "编辑推荐",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
-                    Surface(
-                        shape = RoundedCornerShape(6.dp),
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f)
-                    ) {
-                        Text(
-                            text = novel.genre,
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                        )
-                    }
-                }
+            // Cover
+            NovelCover(
+                url = novel.coverUrl,
+                modifier = Modifier
+                    .width(90.dp)
+                    .height(128.dp)
+                    .clip(RoundedCornerShape(10.dp))
+            )
 
-                Spacer(modifier = Modifier.height(20.dp))
-
-                // Title
-                Text(
-                    text = novel.title,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.Black,
-                    color = MaterialTheme.colorScheme.onBackground,
-                    letterSpacing = (-0.3).sp,
-                    lineHeight = 30.sp
-                )
-
-                Spacer(modifier = Modifier.height(4.dp))
-
-                // Author
-                Text(
-                    text = novel.author,
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Medium
-                )
-
-                // Quote
-                if (novel.quote.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(20.dp))
-                    Text(
-                        text = novel.quote,
-                        fontSize = 13.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                        fontStyle = FontStyle.Italic,
-                        lineHeight = 20.sp,
-                        maxLines = 3,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Meta row
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
+            // Info
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                Surface(
+                    shape = RoundedCornerShape(5.dp),
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
                 ) {
                     Text(
-                        text = novel.wordCount,
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        text = "编辑推荐",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp)
                     )
+                }
+                Spacer(modifier = Modifier.height(2.dp))
+                Text(
+                    text = novel.title,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Black,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (novel.author.isNotEmpty()) {
                     Text(
-                        text = "·",
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f)
+                        text = novel.author,
+                        fontSize = 13.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Medium
                     )
-                    Text(
-                        text = novel.status,
-                        fontSize = 12.sp,
-                        color = if (novel.status == "连载中") MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
-                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (novel.genre.isNotEmpty()) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f)
+                        ) {
+                            Text(
+                                text = novel.genre,
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    if (novel.status.isNotEmpty()) {
+                        Text(
+                            text = novel.status,
+                            fontSize = 10.sp,
+                            color = if ("连载" in novel.status) MaterialTheme.colorScheme.primary.copy(alpha = 0.7f)
+                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        )
+                    }
                 }
             }
         }
     }
 }
 
-// ─── Genre Filter ────────────────────────────────────────────────────────────
+// ─── Ranking Row ─────────────────────────────────────────────────────────────
 
 @Composable
-private fun GenreFilterRow(
-    genres: List<String>,
-    selected: String,
-    onSelect: (String) -> Unit
-) {
+private fun RankingRow(novels: List<NovelItem>, onNovelClick: (String) -> Unit) {
     LazyRow(
         contentPadding = PaddingValues(horizontal = 20.dp),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        items(genres) { genre ->
-            val isSelected = genre == selected
-            Surface(
-                onClick = { onSelect(genre) },
-                shape = RoundedCornerShape(10.dp),
-                color = if (isSelected) MaterialTheme.colorScheme.onBackground
-                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        itemsIndexed(novels) { index, novel ->
+            RankingCard(rank = index + 2, novel = novel, onClick = {
+                onNovelClick(novel.detailUrl)
+            })
+        }
+    }
+}
+
+@Composable
+private fun RankingCard(rank: Int, novel: NovelItem, onClick: () -> Unit) {
+    val rankColor = when (rank) {
+        2 -> Color(0xFFFF6B35)
+        3 -> Color(0xFFFF8F5E)
+        4 -> Color(0xFFFFB088)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+    }
+
+    Surface(
+        modifier = Modifier.width(120.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f),
+        onClick = onClick
+    ) {
+        Column {
+            // Cover with rank badge
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(160.dp)
+                    .clip(RoundedCornerShape(topStart = 12.dp, topEnd = 12.dp))
             ) {
-                Text(
-                    text = genre,
-                    fontSize = 13.sp,
-                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                    color = if (isSelected) MaterialTheme.colorScheme.background
-                            else MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 9.dp)
+                NovelCover(
+                    url = novel.coverUrl,
+                    modifier = Modifier.fillMaxSize()
                 )
+
+                // Rank number
+                Box(
+                    modifier = Modifier
+                        .padding(6.dp)
+                        .size(22.dp)
+                        .clip(RoundedCornerShape(6.dp))
+                        .background(rankColor),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "$rank",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Black,
+                        color = Color.White
+                    )
+                }
+            }
+
+            // Info
+            Column(modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp)) {
+                Text(
+                    text = novel.title,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                    lineHeight = 16.sp
+                )
+                if (novel.author.isNotEmpty()) {
+                    Text(
+                        text = novel.author,
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
             }
         }
     }
@@ -444,79 +533,118 @@ private fun GenreFilterRow(
 // ─── Novel List Item ─────────────────────────────────────────────────────────
 
 @Composable
-private fun NovelListItem(novel: Novel) {
+private fun NovelListItem(novel: NovelItem, onClick: () -> Unit) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(horizontal = 20.dp, vertical = 6.dp),
-        shape = RoundedCornerShape(14.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
+            .padding(horizontal = 20.dp, vertical = 4.dp),
+        shape = RoundedCornerShape(12.dp),
+        color = Color.Transparent,
+        onClick = onClick
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.Top
+            modifier = Modifier.padding(vertical = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
+            // Cover thumbnail
+            NovelCover(
+                url = novel.coverUrl,
+                modifier = Modifier
+                    .width(56.dp)
+                    .height(78.dp)
+                    .clip(RoundedCornerShape(8.dp))
+            )
+
+            // Info
             Column(
                 modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                verticalArrangement = Arrangement.spacedBy(3.dp)
             ) {
                 Text(
                     text = novel.title,
-                    fontSize = 16.sp,
+                    fontSize = 15.sp,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Text(
-                    text = novel.author,
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    fontWeight = FontWeight.Medium
-                )
-                if (novel.description.isNotEmpty()) {
+                if (novel.author.isNotEmpty()) {
                     Text(
-                        text = novel.description,
+                        text = novel.author,
                         fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        lineHeight = 17.sp,
-                        modifier = Modifier.padding(top = 2.dp)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        fontWeight = FontWeight.Medium
                     )
                 }
-                Spacer(modifier = Modifier.height(4.dp))
+                Spacer(modifier = Modifier.height(2.dp))
                 Row(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Surface(
-                        shape = RoundedCornerShape(4.dp),
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f)
-                    ) {
+                    if (novel.genre.isNotEmpty()) {
+                        Surface(
+                            shape = RoundedCornerShape(4.dp),
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.05f)
+                        ) {
+                            Text(
+                                text = novel.genre,
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                    if (novel.status.isNotEmpty()) {
                         Text(
-                            text = novel.genre,
+                            text = novel.status,
                             fontSize = 10.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            color = if ("连载" in novel.status) MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
+                                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
                         )
                     }
                     Text(
-                        text = novel.wordCount,
+                        text = novel.sourceName,
                         fontSize = 10.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                    )
-                    Text(
-                        text = novel.status,
-                        fontSize = 10.sp,
-                        color = if (novel.status == "连载中") MaterialTheme.colorScheme.primary.copy(alpha = 0.6f)
-                                else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.25f)
                     )
                 }
             }
+        }
+    }
+}
+
+// ─── Novel Cover ─────────────────────────────────────────────────────────────
+
+@Composable
+private fun NovelCover(url: String, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    if (url.isNotEmpty()) {
+        AsyncImage(
+            model = ImageRequest.Builder(context)
+                .data(url)
+                .crossfade(true)
+                .build(),
+            contentDescription = null,
+            modifier = modifier,
+            contentScale = ContentScale.Crop
+        )
+    } else {
+        // Gradient placeholder when no cover
+        Box(
+            modifier = modifier.background(
+                brush = Brush.linearGradient(
+                    colors = listOf(
+                        MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
+                        MaterialTheme.colorScheme.tertiary.copy(alpha = 0.2f)
+                    )
+                )
+            ),
+            contentAlignment = Alignment.Center
+        ) {
+            Text(
+                text = "📖",
+                fontSize = 24.sp
+            )
         }
     }
 }
