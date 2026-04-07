@@ -5,64 +5,72 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.webkit.CookieManager
-import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
-import okhttp3.Cookie
-import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.OkHttpClient
-import okhttp3.Request
 
 /**
- * Cloudflare bypass via Android WebView.
+ * Cloudflare bypass via Android WebView — fetches fully rendered HTML.
  *
  * Strategy:
  *   1. Load URL in an invisible WebView (real browser engine)
- *   2. WebView automatically solves Cloudflare JS challenges
- *   3. Extract cf_clearance + other cookies after page loads
- *   4. Inject cookies into OkHttp for subsequent requests
+ *   2. WebView solves Cloudflare JS challenge automatically
+ *   3. Extract rendered HTML via JavaScript after page loads
+ *   4. Return clean HTML for Jsoup parsing
  *
- * This is the same approach used by Tachiyomi/Mihon — battle-tested,
- * permanent, and impossible for Cloudflare to block without blocking
- * all mobile browsers.
- *
- * Usage:
- *   val engine = CloudflareBypass(context)
- *   val cookies = engine.getCookies("https://www.linovelib.com/")
- *   // Use cookies in OkHttp headers: "Cookie" -> cookies
+ * This is simpler and more reliable than cookie extraction:
+ * - No need to coordinate cookies between WebView and OkHttp
+ * - Works even if Cloudflare uses Turnstile
+ * - HTML is fully rendered (JS-generated content included)
  */
 class CloudflareBypass(private val context: Context) {
 
-    private val cookieManager = CookieManager.getInstance()
+    companion object {
+        const val UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) " +
+                "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                "Chrome/124.0.0.0 Mobile Safari/537.36"
+    }
 
     /**
-     * Load [url] in a WebView, wait for Cloudflare to pass,
-     * return the cookie string for use in OkHttp requests.
+     * Fetch the fully rendered HTML of [url] via WebView.
+     * Automatically solves Cloudflare JS challenges.
      *
-     * @param url The URL to navigate to (usually the site's homepage)
-     * @param timeoutMs Maximum time to wait for challenge resolution
-     * @return Cookie string (e.g. "cf_clearance=xxx; __cf_bm=yyy")
+     * @param url Full URL to load
+     * @param timeoutMs Maximum wait time (default 25s, enough for CF challenge)
+     * @return Rendered HTML string
      */
-    suspend fun getCookies(url: String, timeoutMs: Long = 30_000L): String {
+    suspend fun fetchHtml(url: String, timeoutMs: Long = 25_000L): String {
         return withContext(Dispatchers.Main) {
             val deferred = CompletableDeferred<String>()
-
             val webView = createWebView()
-            var challengePassed = false
+            var settled = false
 
+            // Track page loads — Cloudflare may cause multiple redirects
             webView.webViewClient = object : WebViewClient() {
                 override fun onPageFinished(view: WebView, finishedUrl: String?) {
                     super.onPageFinished(view, finishedUrl)
-                    // Check if Cloudflare challenge is done
-                    val cookies = cookieManager.getCookie(url) ?: ""
-                    if (cookies.contains("cf_clearance") || !isCloudflareChallenge(view)) {
-                        if (!challengePassed) {
-                            challengePassed = true
-                            deferred.complete(cookies)
+
+                    // Check if still on Cloudflare challenge
+                    val title = view.title ?: ""
+                    if (isChallengePage(title)) {
+                        // Still solving — wait for next onPageFinished
+                        return
+                    }
+
+                    // Challenge passed! Extract HTML
+                    if (!settled) {
+                        view.evaluateJavascript(
+                            "(function() { return document.documentElement.outerHTML; })()"
+                        ) { rawJs ->
+                            if (!settled) {
+                                settled = true
+                                // JavaScript returns it as a JSON string (quoted)
+                                val html = unescapeJs(rawJs)
+                                deferred.complete(html)
+                            }
                         }
                     }
                 }
@@ -70,57 +78,17 @@ class CloudflareBypass(private val context: Context) {
 
             webView.loadUrl(url)
 
-            // Wait for cookies with timeout
+            // Wait with timeout
             val result = withTimeoutOrNull(timeoutMs) {
                 deferred.await()
-            } ?: (cookieManager.getCookie(url) ?: "")
+            }
 
             // Cleanup
             webView.stopLoading()
             webView.destroy()
 
-            result
+            result ?: throw Exception("页面加载超时 (${timeoutMs / 1000}s)")
         }
-    }
-
-    /**
-     * Fetch HTML content of [url] by first solving Cloudflare,
-     * then using OkHttp with the obtained cookies.
-     */
-    suspend fun fetchWithBypass(
-        client: OkHttpClient,
-        url: String,
-        extraHeaders: Map<String, String> = emptyMap()
-    ): String {
-        val cookies = getCookies(url)
-        return withContext(Dispatchers.IO) {
-            val request = Request.Builder()
-                .url(url)
-                .header("Cookie", cookies)
-                .header("User-Agent", UA)
-                .apply { extraHeaders.forEach { (k, v) -> header(k, v) } }
-                .build()
-            val response = client.newCall(request).execute()
-            if (!response.isSuccessful) error("HTTP ${response.code}")
-            response.body!!.string()
-        }
-    }
-
-    /**
-     * Get cached cookies for a domain (no WebView needed if still fresh).
-     * Returns null if no cookies are cached.
-     */
-    fun getCachedCookies(url: String): String? {
-        val cookies = cookieManager.getCookie(url)
-        return if (cookies != null && cookies.contains("cf_clearance")) cookies else null
-    }
-
-    /**
-     * Clear all cookies for a domain (force re-solve on next request).
-     */
-    fun clearCookies(url: String) {
-        cookieManager.removeAllCookies(null)
-        cookieManager.flush()
     }
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -129,22 +97,42 @@ class CloudflareBypass(private val context: Context) {
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.userAgentString = UA
-            // Invisible — no UI footprint
             settings.loadWithOverviewMode = true
             settings.useWideViewPort = true
+            // Block images for faster loading
+            settings.blockNetworkImage = true
         }
     }
 
-    private fun isCloudflareChallenge(view: WebView): Boolean {
-        // Cloudflare challenge pages have specific titles
-        val title = view.title ?: ""
-        return title.contains("Just a moment") ||
-               title.contains("请稍候") ||
-               title.contains("Checking") ||
-               title.contains("Attention Required")
+    private fun isChallengePage(title: String): Boolean {
+        return "Just a moment" in title ||
+               "请稍候" in title ||
+               "Checking" in title ||
+               "Attention Required" in title ||
+               "Security check" in title
     }
 
-    companion object {
-        const val UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+    /**
+     * Unescape JavaScript string returned by evaluateJavascript.
+     * It comes back as a JSON-encoded string: "\"<html>...<\\/html>\""
+     */
+    private fun unescapeJs(raw: String): String {
+        if (raw == "null" || raw.isBlank()) return ""
+        // Remove surrounding quotes
+        var s = raw
+        if (s.startsWith("\"") && s.endsWith("\"")) {
+            s = s.substring(1, s.length - 1)
+        }
+        // Unescape common sequences
+        return s.replace("\\\"", "\"")
+            .replace("\\/", "/")
+            .replace("\\n", "\n")
+            .replace("\\t", "\t")
+            .replace("\\u003C", "<")
+            .replace("\\u003c", "<")
+            .replace("\\u003E", ">")
+            .replace("\\u003e", ">")
+            .replace("\\u0026", "&")
+            .replace("\\\\", "\\")
     }
 }

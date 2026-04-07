@@ -5,14 +5,13 @@ import com.kousoyu.drift.data.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
-import okhttp3.Request
 import org.jsoup.Jsoup
 
 /**
  * 哔哩轻小说 (linovelib.com) — Light Novel source.
  *
- * Uses CloudflareBypass for initial cookie acquisition,
- * then OkHttp + Jsoup for all subsequent requests.
+ * Uses CloudflareBypass (WebView) for all requests —
+ * no cookie management needed, just direct HTML extraction.
  *
  * URL patterns:
  *   Popular:  /top/monthvisit/1.html
@@ -29,48 +28,14 @@ class LinovelibSource(
     override val name    = "哔哩轻小说"
     override val baseUrl = "https://www.linovelib.com"
 
-    private val cfBypass = CloudflareBypass(context)
+    private val cfBypass = CloudflareBypass(context.applicationContext)
 
-    // ─── Cookie-aware fetch ─────────────────────────────────────────────────
+    // ─── WebView-based fetch ────────────────────────────────────────────────
 
-    /**
-     * Fetch HTML with Cloudflare cookie.
-     * First tries cached cookie; if that fails (403), re-solves via WebView.
-     */
-    private suspend fun fetch(path: String): String = withContext(Dispatchers.IO) {
+    private suspend fun fetch(path: String): String {
         val url = if (path.startsWith("http")) path
                   else "${baseUrl.trimEnd('/')}/${path.trimStart('/')}"
-
-        // Try with cached cookies first
-        val cachedCookies = cfBypass.getCachedCookies(baseUrl)
-        if (cachedCookies != null) {
-            try {
-                val html = doFetch(url, cachedCookies)
-                if (!isCloudflareBlock(html)) return@withContext html
-            } catch (_: Exception) { /* cookie expired, re-solve */ }
-        }
-
-        // Re-solve Cloudflare via WebView
-        val freshCookies = withContext(Dispatchers.Main) {
-            cfBypass.getCookies(baseUrl)
-        }
-        doFetch(url, freshCookies)
-    }
-
-    private fun doFetch(url: String, cookies: String): String {
-        val req = Request.Builder()
-            .url(url)
-            .header("Cookie", cookies)
-            .header("User-Agent", CloudflareBypass.UA)
-            .header("Referer", "$baseUrl/")
-            .build()
-        val res = client.newCall(req).execute()
-        if (!res.isSuccessful) error("HTTP ${res.code} @ $url")
-        return res.body!!.string()
-    }
-
-    private fun isCloudflareBlock(html: String): Boolean {
-        return "Just a moment" in html || "请稍候" in html || "cf-challenge" in html
+        return cfBypass.fetchHtml(url)
     }
 
     // ─── Popular ────────────────────────────────────────────────────────────
@@ -94,59 +59,27 @@ class LinovelibSource(
         val html = fetch(detailUrl)
         val doc = Jsoup.parse(html, baseUrl)
 
-        val title  = doc.selectFirst("h1")?.text()?.trim()
-            ?: doc.selectFirst(".book-title")?.text()?.trim() ?: "未知标题"
-        val author = doc.selectFirst(".book-rand-a a")?.text()?.trim()
-            ?: doc.select("span:contains(作者) + a, .author a").firstOrNull()?.text()?.trim() ?: ""
-        val cover  = doc.selectFirst(".book-img img")?.let { absUrl(it.attr("src")) }
-            ?: doc.selectFirst("meta[property=og:image]")?.attr("content") ?: ""
-        val desc   = doc.selectFirst(".book-dec p, .book-info-detail .book-dec")?.text()?.trim()
-            ?: doc.selectFirst("meta[name=description]")?.attr("content") ?: ""
-        val status = doc.selectFirst(".book-label span, span.state")?.text()?.trim() ?: ""
+        // Multiple fallback selectors for resilience
+        val title  = sel(doc, "h1", "h2.book-title", ".book-title") ?: "未知标题"
+        val author = sel(doc, ".book-rand-a a", ".author a", "span:contains(作者) + a") ?: ""
+        val cover  = selAttr(doc, "src", ".book-img img", ".book-cover img")
+            ?: selAttr(doc, "content", "meta[property=og:image]") ?: ""
+        val desc   = sel(doc, ".book-dec p", ".book-info-detail .book-dec",
+                         "meta[name=description]") ?: ""
+        val status = sel(doc, ".book-label span", "span.state", ".book-label .color1") ?: ""
 
-        // Fetch catalog page for volumes + chapters
+        // Fetch catalog
         val novelId = detailUrl.substringAfterLast("/novel/").substringBefore(".html")
         val catalogHtml = fetch("/novel/$novelId/catalog")
         val catalogDoc = Jsoup.parse(catalogHtml, baseUrl)
 
-        val volumes = mutableListOf<NovelVolume>()
-        // linovelib catalog: volume headers in <h4> or <div class="chapter-bar">,
-        // chapters in <li><a> within the same section
-        val volumeElements = catalogDoc.select(".chapter-list")
-        if (volumeElements.isNotEmpty()) {
-            volumeElements.forEach { volEl ->
-                val volName = volEl.previousElementSibling()?.text()?.trim()
-                    ?: "未知卷"
-                val chapters = volEl.select("li a").map { a ->
-                    NovelChapter(
-                        name = a.text().trim(),
-                        url = absUrl(a.attr("href"))
-                    )
-                }
-                if (chapters.isNotEmpty()) {
-                    volumes.add(NovelVolume(name = volName, chapters = chapters))
-                }
-            }
-        }
-
-        // Fallback: flat chapter structure
-        if (volumes.isEmpty()) {
-            val allChapters = catalogDoc.select("a[href*=/novel/]").filter {
-                it.attr("href").count { c -> c == '/' } >= 3
-            }.map { a ->
-                NovelChapter(name = a.text().trim(), url = absUrl(a.attr("href")))
-            }.distinctBy { it.url }
-
-            if (allChapters.isNotEmpty()) {
-                volumes.add(NovelVolume(name = title, chapters = allChapters))
-            }
-        }
+        val volumes = parseCatalog(catalogDoc, title)
 
         NovelDetail(
             url = detailUrl,
             title = title,
             author = author,
-            coverUrl = cover,
+            coverUrl = absUrl(cover),
             description = desc,
             status = status,
             volumes = volumes
@@ -159,16 +92,13 @@ class LinovelibSource(
         val html = fetch(chapterUrl)
         val doc = Jsoup.parse(html, baseUrl)
 
-        // linovelib chapter content is in #acontent or .read-content
-        val content = doc.selectFirst("#acontent, .read-content, .chapter-content")
+        val content = doc.selectFirst("#acontent, .read-content, .chapter-content, #TextContent")
             ?: error("未找到章节内容")
 
-        // Remove script tags and ads
-        content.select("script, .google-auto-placed, .adsbygoogle, ins, .tp-box").remove()
-
-        // Convert <br> and <p> to newlines for clean text
-        content.select("br").append("\\n")
-        content.select("p").prepend("\\n")
+        // Clean up
+        content.select("script, .google-auto-placed, .adsbygoogle, ins, .tp-box, style").remove()
+        content.select("br").append("\n")
+        content.select("p").prepend("\n")
 
         content.text()
             .replace("\\n", "\n")
@@ -176,64 +106,112 @@ class LinovelibSource(
             .trim()
     }
 
-    // ─── Headers ────────────────────────────────────────────────────────────
-
     override fun getHeaders(): Map<String, String> = mapOf(
         "User-Agent" to CloudflareBypass.UA,
         "Referer" to "$baseUrl/"
     )
 
-    // ─── Parse Helpers ──────────────────────────────────────────────────────
+    // ─── Parse Logic ────────────────────────────────────────────────────────
 
     private fun parseNovelList(html: String): List<NovelItem> {
         val doc = Jsoup.parse(html, baseUrl)
 
-        // Try ranking page format first
-        val items = doc.select(".book-li, .rank-list .book-layout, li[class*=book]")
+        // Strategy 1: Structured book items
+        val bookItems = doc.select(".book-li, .rank-book-list li, .book-layout, .book-item")
+        if (bookItems.isNotEmpty()) {
+            return bookItems.mapNotNull { el ->
+                val linkEl = el.selectFirst("a[href*=/novel/]") ?: return@mapNotNull null
+                val title = el.selectFirst("h4, h3, h2, .book-title")?.text()?.trim()
+                    ?: linkEl.text().trim()
+                if (title.isBlank() || title.length < 2) return@mapNotNull null
 
-        if (items.isNotEmpty()) {
-            return items.mapNotNull { el ->
-                val titleEl = el.selectFirst("h4 a, .book-title a, h2 a") ?: return@mapNotNull null
-                val title = titleEl.text().trim().ifEmpty { return@mapNotNull null }
-                val href = absUrl(titleEl.attr("href"))
-                val cover = el.selectFirst("img")?.let { absUrl(it.attr("src").ifEmpty { it.attr("data-src") }) } ?: ""
-                val author = el.selectFirst(".author, .book-author, span:contains(作者)")?.text()
-                    ?.replace("作者：", "")?.trim() ?: ""
+                val href = absUrl(linkEl.attr("href"))
+                if (!href.contains("/novel/")) return@mapNotNull null
+
+                val cover = el.selectFirst("img")?.let {
+                    absUrl(it.attr("src").ifEmpty { it.attr("data-src") })
+                } ?: ""
+                val author = el.selectFirst(".author a, .book-author")?.text()?.trim() ?: ""
                 val status = el.selectFirst(".book-label span, .status")?.text()?.trim() ?: ""
-                val genre = el.selectFirst(".book-tags span, .tag")?.text()?.trim() ?: ""
 
                 NovelItem(
-                    title = title,
-                    author = author,
-                    coverUrl = cover,
-                    detailUrl = href,
-                    genre = genre,
-                    status = status,
-                    sourceName = name
+                    title = title, author = author, coverUrl = cover,
+                    detailUrl = href, status = status, sourceName = name
                 )
             }.distinctBy { it.detailUrl }
         }
 
-        // Fallback: generic link extraction
+        // Strategy 2: Generic link extraction (less reliable but catches edge cases)
         return doc.select("a[href*=/novel/]").mapNotNull { a ->
             val href = absUrl(a.attr("href"))
-            if (!href.contains("/novel/") || href.endsWith("/catalog")) return@mapNotNull null
-            val title = a.text().trim().ifEmpty { return@mapNotNull null }
-            // Skip navigation links
-            if (title.length < 2 || title in listOf("首页", "分类", "排行", "全本", "文库")) return@mapNotNull null
+            if (!href.matches(Regex(".*/novel/\\d+\\.html$"))) return@mapNotNull null
+            val title = a.text().trim()
+            if (title.length < 2) return@mapNotNull null
+            val skipList = setOf("首页", "分类", "排行", "全本", "文库", "登录", "注册",
+                                 "立即阅读", "开始阅读", "更多")
+            if (title in skipList) return@mapNotNull null
+
             NovelItem(
-                title = title,
-                author = "",
-                coverUrl = "",
-                detailUrl = href,
-                sourceName = name
+                title = title, author = "", coverUrl = "",
+                detailUrl = href, sourceName = name
             )
         }.distinctBy { it.detailUrl }
     }
 
+    private fun parseCatalog(doc: org.jsoup.nodes.Document, fallbackTitle: String): List<NovelVolume> {
+        val volumes = mutableListOf<NovelVolume>()
+
+        // Try structured volume/chapter layout
+        val chapterLists = doc.select(".chapter-list, .volume-list, ol.chapter-bar-list")
+        if (chapterLists.isNotEmpty()) {
+            chapterLists.forEach { volEl ->
+                val volName = volEl.previousElementSibling()?.text()?.trim()
+                    ?: volEl.attr("data-volume-name").ifEmpty { null }
+                    ?: "未知卷"
+                val chapters = volEl.select("li a, a.chapter-li-a").mapNotNull { a ->
+                    val href = a.attr("href")
+                    if (href.isBlank()) return@mapNotNull null
+                    NovelChapter(name = a.text().trim(), url = absUrl(href))
+                }
+                if (chapters.isNotEmpty()) {
+                    volumes.add(NovelVolume(name = volName, chapters = chapters))
+                }
+            }
+        }
+
+        // Fallback: all links that look like chapter URLs
+        if (volumes.isEmpty()) {
+            val allChapters = doc.select("a[href]").mapNotNull { a ->
+                val href = a.attr("href")
+                if (!href.contains("/novel/") || href.endsWith("/catalog") || href.endsWith(".html").not()) return@mapNotNull null
+                // Chapters have a deeper path than detail pages
+                val path = href.substringAfter("/novel/")
+                if (!path.contains("/")) return@mapNotNull null
+                val text = a.text().trim()
+                if (text.isBlank() || text.length < 2) return@mapNotNull null
+                NovelChapter(name = text, url = absUrl(href))
+            }.distinctBy { it.url }
+
+            if (allChapters.isNotEmpty()) {
+                volumes.add(NovelVolume(name = fallbackTitle, chapters = allChapters))
+            }
+        }
+
+        return volumes
+    }
+
+    // ─── Helpers ────────────────────────────────────────────────────────────
+
+    private fun sel(doc: org.jsoup.nodes.Document, vararg sels: String): String? =
+        sels.firstNotNullOfOrNull { doc.selectFirst(it)?.text()?.trim()?.ifEmpty { null } }
+
+    private fun selAttr(doc: org.jsoup.nodes.Document, attr: String, vararg sels: String): String? =
+        sels.firstNotNullOfOrNull { doc.selectFirst(it)?.attr(attr)?.trim()?.ifEmpty { null } }
+
     private fun absUrl(url: String): String {
         if (url.startsWith("http")) return url
         if (url.startsWith("//")) return "https:$url"
-        return "${baseUrl.trimEnd('/')}/${url.trimStart('/')}"
+        if (url.startsWith("/")) return "$baseUrl$url"
+        return "${baseUrl}/$url"
     }
 }
