@@ -35,11 +35,13 @@ class UpdateManager(private val context: Context) {
 
     // ─── Configure these when you create your GitHub repo ────────────────────
     companion object {
-        // TODO: 替换成你的 GitHub 用户名和仓库名
         const val GITHUB_OWNER = "kousoyu"
         const val GITHUB_REPO  = "Drift"
-        
+
         private const val API_URL = "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases/latest"
+
+        // GitHub CDN 在国内很慢，通过镜像加速下载
+        private const val GITHUB_PROXY = "https://ghgo.xyz/"
     }
 
     data class UpdateInfo(
@@ -142,7 +144,13 @@ class UpdateManager(private val context: Context) {
         downloadDir?.listFiles()?.forEach { if (it.name.endsWith(".apk")) it.delete() }
 
         val fileName = "Drift-v${info.versionName}.apk"
-        val request = DownloadManager.Request(Uri.parse(info.downloadUrl)).apply {
+        // 通过镜像代理加速 GitHub 下载
+        val proxyUrl = if (info.downloadUrl.contains("github.com")) {
+            GITHUB_PROXY + info.downloadUrl
+        } else {
+            info.downloadUrl
+        }
+        val request = DownloadManager.Request(Uri.parse(proxyUrl)).apply {
             setTitle("Drift 更新 v${info.versionName}")
             setDescription("正在下载新版本...")
             setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
