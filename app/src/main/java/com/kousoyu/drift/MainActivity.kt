@@ -122,7 +122,9 @@ class MainActivity : ComponentActivity() {
                 // Download progress bar at top
                 Column {
                     if (updateState is UpdateManager.UpdateState.Downloading) {
-                        UpdateDownloadingBar()
+                        UpdateDownloadingBar(
+                            progress = (updateState as UpdateManager.UpdateState.Downloading).progress
+                        )
                     }
 
                 NavHost(

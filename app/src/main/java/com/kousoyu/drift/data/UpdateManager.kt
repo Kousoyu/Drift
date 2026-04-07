@@ -17,6 +17,11 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 /**
  * App Update Manager — checks GitHub Releases for new versions and handles
@@ -65,6 +70,7 @@ class UpdateManager(private val context: Context) {
     val updateState: StateFlow<UpdateState> = _updateState
 
     private val client = OkHttpClient()
+    private var progressJob: Job? = null
 
     /**
      * Check GitHub Releases API for the latest version.
@@ -161,6 +167,36 @@ class UpdateManager(private val context: Context) {
 
         val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
         val downloadId = downloadManager.enqueue(request)
+
+        // ── 轮询下载进度 ──
+        progressJob?.cancel()
+        progressJob = CoroutineScope(Dispatchers.IO).launch {
+            while (isActive) {
+                delay(300)
+                val query = DownloadManager.Query().setFilterById(downloadId)
+                val cursor = downloadManager.query(query)
+                if (cursor != null && cursor.moveToFirst()) {
+                    val bytesIdx = cursor.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+                    val totalIdx = cursor.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+                    val statusIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                    val downloaded = if (bytesIdx >= 0) cursor.getLong(bytesIdx) else 0L
+                    val total = if (totalIdx >= 0) cursor.getLong(totalIdx) else 0L
+                    val status = if (statusIdx >= 0) cursor.getInt(statusIdx) else 0
+                    cursor.close()
+
+                    if (status == DownloadManager.STATUS_SUCCESSFUL || status == DownloadManager.STATUS_FAILED) {
+                        break
+                    }
+                    if (total > 0) {
+                        val pct = ((downloaded * 100) / total).toInt().coerceIn(0, 100)
+                        _updateState.value = UpdateState.Downloading(pct)
+                    }
+                } else {
+                    cursor?.close()
+                    break
+                }
+            }
+        }
 
         // Register receiver to trigger install when download completes
         val receiver = object : BroadcastReceiver() {
