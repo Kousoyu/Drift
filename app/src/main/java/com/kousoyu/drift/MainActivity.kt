@@ -46,13 +46,22 @@ object DriftRoutes {
     const val PROFILE_EDIT = "profile_edit"
     const val DETAIL  = "detail?url={url}&sourceName={sourceName}"
     const val READER  = "reader?url={url}&mangaUrl={mangaUrl}&chapterName={chapterName}&sourceName={sourceName}"
+    const val NOVEL_DETAIL = "novel_detail?url={url}"
+    const val NOVEL_READER = "novel_reader?url={url}&chapterName={chapterName}"
     
     fun createDetailRoute(url: String, sourceName: String): String {
-        return "detail?url=${java.net.URLEncoder.encode(url, "UTF-8").replace("+", "%20")}&sourceName=${java.net.URLEncoder.encode(sourceName, "UTF-8").replace("+", "%20")}"
+        return "detail?url=${enc(url)}&sourceName=${enc(sourceName)}"
     }
     fun createReaderRoute(chapterUrl: String, mangaUrl: String, chapterName: String, sourceName: String): String {
-        return "reader?url=${java.net.URLEncoder.encode(chapterUrl, "UTF-8").replace("+", "%20")}&mangaUrl=${java.net.URLEncoder.encode(mangaUrl, "UTF-8").replace("+", "%20")}&chapterName=${java.net.URLEncoder.encode(chapterName, "UTF-8").replace("+", "%20")}&sourceName=${java.net.URLEncoder.encode(sourceName, "UTF-8").replace("+", "%20")}"
+        return "reader?url=${enc(chapterUrl)}&mangaUrl=${enc(mangaUrl)}&chapterName=${enc(chapterName)}&sourceName=${enc(sourceName)}"
     }
+    fun createNovelDetailRoute(url: String): String {
+        return "novel_detail?url=${enc(url)}"
+    }
+    fun createNovelReaderRoute(chapterUrl: String, chapterName: String): String {
+        return "novel_reader?url=${enc(chapterUrl)}&chapterName=${enc(chapterName)}"
+    }
+    private fun enc(s: String) = java.net.URLEncoder.encode(s, "UTF-8").replace("+", "%20")
 }
 
 private const val NAV_ANIM_MS = 230
@@ -266,6 +275,46 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
+                    // ─ Novel Detail screen
+                    composable(
+                        route = DriftRoutes.NOVEL_DETAIL,
+                        arguments = listOf(
+                            androidx.navigation.navArgument("url") { type = androidx.navigation.NavType.StringType; defaultValue = "" }
+                        ),
+                        enterTransition = { slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(NAV_ANIM_MS)) },
+                        exitTransition = { slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(NAV_ANIM_MS)) },
+                        popEnterTransition = { slideInHorizontally(initialOffsetX = { -it }, animationSpec = tween(NAV_ANIM_MS)) },
+                        popExitTransition = { slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(NAV_ANIM_MS)) }
+                    ) { backStackEntry ->
+                        val url = backStackEntry.arguments?.getString("url") ?: ""
+                        NovelDetailScreen(
+                            detailUrl = url,
+                            onBack = { navController.popBackStack() },
+                            onChapterClick = { chapterUrl, chapterName ->
+                                navController.navigate(DriftRoutes.createNovelReaderRoute(chapterUrl, chapterName))
+                            }
+                        )
+                    }
+
+                    // ─ Novel Reader screen
+                    composable(
+                        route = DriftRoutes.NOVEL_READER,
+                        arguments = listOf(
+                            androidx.navigation.navArgument("url") { type = androidx.navigation.NavType.StringType; defaultValue = "" },
+                            androidx.navigation.navArgument("chapterName") { type = androidx.navigation.NavType.StringType; defaultValue = "" }
+                        ),
+                        enterTransition = { slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(NAV_ANIM_MS)) },
+                        popExitTransition = { slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(NAV_ANIM_MS)) }
+                    ) { backStackEntry ->
+                        val url = backStackEntry.arguments?.getString("url") ?: ""
+                        val chapterName = backStackEntry.arguments?.getString("chapterName") ?: ""
+                        NovelReaderScreen(
+                            chapterUrl = url,
+                            chapterName = chapterName,
+                            onBack = { navController.popBackStack() }
+                        )
+                    }
+
                     // ─ Profile Edit screen
                     composable(
                         route = DriftRoutes.PROFILE_EDIT,
@@ -364,7 +413,9 @@ fun DriftApp(
                     onNavigateToSearch   = { navController.navigate(DriftRoutes.SEARCH) },
                     onNavigateToDetail   = { url, src -> navController.navigate(DriftRoutes.createDetailRoute(url, src)) }
                 )
-                1 -> NovelScreen()
+                1 -> NovelScreen(
+                    onNavigateToDetail = { url -> navController.navigate(DriftRoutes.createNovelDetailRoute(url)) }
+                )
                 2 -> ProfileScreen(
                     currentTheme  = currentTheme,
                     onThemeChange = onThemeChange,
