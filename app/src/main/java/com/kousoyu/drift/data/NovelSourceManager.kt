@@ -1,6 +1,7 @@
 package com.kousoyu.drift.data
 
 import android.content.Context
+import com.kousoyu.drift.data.sources.BiqugeSource
 import com.kousoyu.drift.data.sources.LinovelibSource
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -9,16 +10,20 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Central registry for all novel sources.
+ *
+ * Default: BiqugeSource (no Cloudflare, instant loading)
+ * Secondary: LinovelibSource (has CF, slower but light novel focused)
  */
 object NovelSourceManager {
 
     private val client = OkHttpClient.Builder()
-        .connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(15, TimeUnit.SECONDS)
         .followRedirects(true)
         .followSslRedirects(true)
         .build()
 
+    private lateinit var biquge: BiqugeSource
     private lateinit var linovelib: LinovelibSource
 
     lateinit var sources: List<NovelSource>
@@ -32,9 +37,14 @@ object NovelSourceManager {
     fun init(context: Context) {
         if (initialized) return
         val appCtx = context.applicationContext
+
+        biquge   = BiqugeSource(client)
         linovelib = LinovelibSource(client, appCtx)
-        sources   = listOf(linovelib)
-        _currentSource.value = linovelib
+
+        // Biquge first — it's fast (no Cloudflare)
+        sources = listOf(biquge, linovelib)
+        _currentSource.value = biquge
+
         initialized = true
     }
 

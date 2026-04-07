@@ -74,25 +74,32 @@ fun NovelScreen(
             // ── Header ──
             item { NovelHeader() }
 
-            // ── Source Chip ──
+            // ── Source Switcher ──
             item {
                 Spacer(modifier = Modifier.height(12.dp))
                 Row(
                     modifier = Modifier.padding(horizontal = 20.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Surface(
-                        shape = RoundedCornerShape(8.dp),
-                        color = MaterialTheme.colorScheme.primaryContainer
-                    ) {
-                        Text(
-                            text = currentSource.name,
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.onPrimaryContainer,
-                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
-                        )
+                    val allSources = NovelSourceManager.sources
+                    allSources.forEach { src ->
+                        val isSelected = src.name == currentSource.name
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = if (isSelected) MaterialTheme.colorScheme.primaryContainer
+                                    else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f),
+                            onClick = { if (!isSelected) novelViewModel.switchSource(src) }
+                        ) {
+                            Text(
+                                text = src.name,
+                                fontSize = 12.sp,
+                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer
+                                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                            )
+                        }
                     }
 
                     Spacer(Modifier.weight(1f))
