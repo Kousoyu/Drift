@@ -147,7 +147,6 @@ class UpdateManager(private val context: Context) {
             setDescription("正在下载新版本...")
             setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
             setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, fileName)
-            // GitHub may redirect, allow both HTTP and HTTPS
             setAllowedOverMetered(true)
             setAllowedOverRoaming(true)
         }
@@ -159,16 +158,50 @@ class UpdateManager(private val context: Context) {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, intent: Intent) {
                 val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
-                if (id == downloadId) {
-                    ctx.unregisterReceiver(this)
-                    val apkFile = File(downloadDir, fileName)
-                    if (apkFile.exists()) {
-                        installApk(ctx, apkFile)
-                        _updateState.value = UpdateState.Idle
-                    } else {
-                        _updateState.value = UpdateState.Error("下载文件不存在")
+                if (id != downloadId) return
+
+                try { ctx.unregisterReceiver(this) } catch (_: Exception) {}
+
+                // ── 检查下载状态 ──
+                val query = DownloadManager.Query().setFilterById(downloadId)
+                val cursor = downloadManager.query(query)
+                if (cursor != null && cursor.moveToFirst()) {
+                    val statusIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                    val status = if (statusIdx >= 0) cursor.getInt(statusIdx) else -1
+                    cursor.close()
+
+                    if (status != DownloadManager.STATUS_SUCCESSFUL) {
+                        _updateState.value = UpdateState.Error("下载失败，请重试")
+                        return
                     }
                 }
+
+                val apkFile = File(downloadDir, fileName)
+                if (!apkFile.exists() || apkFile.length() < 1024) {
+                    _updateState.value = UpdateState.Error("下载文件无效，请重试")
+                    return
+                }
+
+                // ── 检查安装权限 ──
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    if (!ctx.packageManager.canRequestPackageInstalls()) {
+                        // 引导用户开启安装权限
+                        try {
+                            val settingsIntent = Intent(
+                                android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                Uri.parse("package:${ctx.packageName}")
+                            ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                            ctx.startActivity(settingsIntent)
+                            _updateState.value = UpdateState.Error("请允许安装权限后重试")
+                        } catch (_: Exception) {
+                            _updateState.value = UpdateState.Error("请在设置中允许安装未知来源应用")
+                        }
+                        return
+                    }
+                }
+
+                installApk(ctx, apkFile)
+                _updateState.value = UpdateState.Idle
             }
         }
 
@@ -190,17 +223,21 @@ class UpdateManager(private val context: Context) {
      * Trigger the system APK installer via FileProvider.
      */
     private fun installApk(context: Context, apkFile: File) {
-        val uri = FileProvider.getUriForFile(
-            context,
-            "${context.packageName}.fileprovider",
-            apkFile
-        )
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "application/vnd.android.package-archive")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        try {
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.fileprovider",
+                apkFile
+            )
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "application/vnd.android.package-archive")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            context.startActivity(intent)
+        } catch (e: Exception) {
+            _updateState.value = UpdateState.Error("安装失败: ${e.message}")
         }
-        context.startActivity(intent)
     }
 
     fun dismiss() {
