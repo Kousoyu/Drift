@@ -1,7 +1,11 @@
 package com.kousoyu.drift.data
 
-import androidx.lifecycle.ViewModel
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kousoyu.drift.data.local.DriftDatabase
+import com.kousoyu.drift.data.local.NovelEntity
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -13,8 +17,9 @@ import kotlinx.coroutines.launch
  * - Loads data ONCE on init, caches it, doesn't reload when switching tabs
  * - Only reloads on explicit refresh() or switchSource()
  * - Per-source cache: switching back doesn't re-fetch
+ * - Bookshelf: real-time Room Flow for favorites
  */
-class NovelViewModel : ViewModel() {
+class NovelViewModel(app: Application) : AndroidViewModel(app) {
 
     sealed class UiState {
         data object Loading : UiState()
@@ -22,38 +27,32 @@ class NovelViewModel : ViewModel() {
         data class Error(val message: String) : UiState()
     }
 
+    private val dao = DriftDatabase.getDatabase(app).novelDao()
+
     private val _uiState = MutableStateFlow<UiState>(UiState.Loading)
     val uiState: StateFlow<UiState> = _uiState
 
-    private val _searchResults = MutableStateFlow<UiState>(UiState.Success(emptyList()))
-    val searchResults: StateFlow<UiState> = _searchResults
-
     val currentSource = NovelSourceManager.currentSource
 
+    // Bookshelf — real-time from Room
+    val bookshelf: StateFlow<List<NovelEntity>> = dao.getAllFavorites()
+        .stateIn(viewModelScope, SharingStarted.Lazily, emptyList())
+
     private var loadJob: Job? = null
-    private var searchJob: Job? = null
 
     // Per-source cache → switching back is instant
     private val sourceCache = mutableMapOf<String, List<NovelItem>>()
 
     init {
-        // Load once on creation — ViewModel survives tab switches
         loadPopular()
     }
 
-    /**
-     * Load popular novels. Uses cache if available.
-     */
     fun loadPopular() {
         val sourceName = currentSource.value.name
-
-        // Cache hit → instant display
         sourceCache[sourceName]?.let {
             _uiState.value = UiState.Success(it)
             return
         }
-
-        // Cache miss → fetch
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
             _uiState.value = UiState.Loading
@@ -69,28 +68,19 @@ class NovelViewModel : ViewModel() {
         }
     }
 
-    fun search(query: String) {
-        if (query.isBlank()) {
-            _searchResults.value = UiState.Success(emptyList())
-            return
-        }
-        searchJob?.cancel()
-        searchJob = viewModelScope.launch {
-            _searchResults.value = UiState.Loading
-            currentSource.value.searchNovel(query)
-                .onSuccess { _searchResults.value = UiState.Success(it) }
-                .onFailure { _searchResults.value = UiState.Error(it.message ?: "搜索失败") }
+    fun search(query: String, onResult: (Result<List<NovelItem>>) -> Unit) {
+        if (query.isBlank()) return
+        viewModelScope.launch {
+            val result = currentSource.value.searchNovel(query)
+            onResult(result)
         }
     }
 
     fun switchSource(source: NovelSource) {
         NovelSourceManager.switchSource(source)
-        loadPopular()  // Will use cache if available
+        loadPopular()
     }
 
-    /**
-     * Force refresh — clears cache for current source.
-     */
     fun refresh() {
         sourceCache.remove(currentSource.value.name)
         loadPopular()

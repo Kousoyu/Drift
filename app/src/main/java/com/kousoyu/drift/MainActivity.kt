@@ -53,6 +53,7 @@ object DriftRoutes {
     const val READER  = "reader?url={url}&mangaUrl={mangaUrl}&chapterName={chapterName}&sourceName={sourceName}"
     const val NOVEL_DETAIL = "novel_detail?url={url}"
     const val NOVEL_READER = "novel_reader?url={url}&chapterName={chapterName}"
+    const val NOVEL_SEARCH = "novel_search"
     
     fun createDetailRoute(url: String, sourceName: String): String {
         return "detail?url=${enc(url)}&sourceName=${enc(sourceName)}"
@@ -279,6 +280,20 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
+                    // ─ Novel Search screen
+                    composable(
+                        route = DriftRoutes.NOVEL_SEARCH,
+                        enterTransition = { slideInHorizontally(initialOffsetX = { it }, animationSpec = tween(NAV_ANIM_MS)) },
+                        exitTransition = { slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(NAV_ANIM_MS)) },
+                        popEnterTransition = { slideInHorizontally(initialOffsetX = { -it }, animationSpec = tween(NAV_ANIM_MS)) },
+                        popExitTransition = { slideOutHorizontally(targetOffsetX = { it }, animationSpec = tween(NAV_ANIM_MS)) }
+                    ) {
+                        NovelSearchScreen(
+                            onBack = { navController.popBackStack() },
+                            onNovelClick = { url -> navController.navigate(DriftRoutes.createNovelDetailRoute(url)) }
+                        )
+                    }
+
                     // ─ Novel Detail screen
                     composable(
                         route = DriftRoutes.NOVEL_DETAIL,
@@ -295,7 +310,6 @@ class MainActivity : ComponentActivity() {
                             detailUrl = url,
                             onBack = { navController.popBackStack() },
                             onChapterClick = { chapterUrl, chapterName, allChapters ->
-                                // Store chapter list in memory for the reader
                                 NovelChapterHolder.chapters = allChapters
                                 navController.navigate(DriftRoutes.createNovelReaderRoute(chapterUrl, chapterName))
                             }
@@ -427,7 +441,8 @@ fun DriftApp(
                     onNavigateToDetail   = { url, src -> navController.navigate(DriftRoutes.createDetailRoute(url, src)) }
                 )
                 1 -> NovelScreen(
-                    onNavigateToDetail = { url -> navController.navigate(DriftRoutes.createNovelDetailRoute(url)) }
+                    onNavigateToDetail = { url -> navController.navigate(DriftRoutes.createNovelDetailRoute(url)) },
+                    onNavigateToSearch = { navController.navigate(DriftRoutes.NOVEL_SEARCH) }
                 )
                 2 -> ProfileScreen(
                     currentTheme  = currentTheme,

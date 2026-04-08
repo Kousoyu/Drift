@@ -7,6 +7,8 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -25,6 +27,8 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.kousoyu.drift.data.*
+import com.kousoyu.drift.data.local.NovelEntity
+import androidx.lifecycle.viewmodel.compose.viewModel
 
 /**
  * Novel Detail Screen — cover, info, sort toggle, continue reading, volume/chapter list.
@@ -45,9 +49,17 @@ fun NovelDetailScreen(
     onChapterClick: (chapterUrl: String, chapterName: String, allChapters: List<NovelChapter>) -> Unit
 ) {
     val source = NovelSourceManager.currentSource.collectAsState().value
+    val detailVm: NovelDetailViewModel = viewModel()
+    val localNovel by detailVm.localNovel.collectAsState()
     var detail by remember { mutableStateOf<NovelDetail?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
+
+    // Start observing bookshelf state
+    LaunchedEffect(detailUrl) {
+        val url = java.net.URLDecoder.decode(detailUrl, "UTF-8")
+        detailVm.observe(url)
+    }
     var isReversed by remember { mutableStateOf(sortOrderCache[detailUrl] ?: false) }
 
     // Load detail — uses cache if available (invalidate stale entries)
@@ -91,6 +103,19 @@ fun NovelDetailScreen(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                },
+                actions = {
+                    detail?.let { d ->
+                        IconButton(onClick = { detailVm.toggleFavorite(d) }) {
+                            Icon(
+                                imageVector = if (localNovel != null) Icons.Default.Bookmark
+                                              else Icons.Default.BookmarkBorder,
+                                contentDescription = if (localNovel != null) "取消收藏" else "收藏",
+                                tint = if (localNovel != null) MaterialTheme.colorScheme.primary
+                                       else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
