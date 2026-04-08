@@ -1,17 +1,18 @@
 package com.kousoyu.drift.data
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 import okhttp3.Request
 
 /**
  * Discovers the currently active bilinovel domain.
  *
  * Bilinovel changes domains every 1-2 years. This resolver probes
- * a list of known candidates and caches the first responsive one.
+ * ALL candidates in parallel and picks the first responsive one.
  *
- * Cost: one HEAD request (~50ms) per candidate, runs once per app launch.
+ * Cost: one HEAD request per candidate (~50ms total since parallel).
  */
 object DomainResolver {
 
@@ -23,13 +24,6 @@ object DomainResolver {
     )
 
     @Volatile private var resolved: String? = null
-
-    private val probeClient = OkHttpClient.Builder()
-        .connectTimeout(5, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(3, java.util.concurrent.TimeUnit.SECONDS)
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .build()
 
     /**
      * Returns the active domain. Cached after first successful probe.
@@ -44,21 +38,37 @@ object DomainResolver {
      */
     suspend fun refresh(): String = resolve().also { resolved = it }
 
+    /**
+     * Probe ALL candidates in parallel, return the fastest responding one.
+     */
     private suspend fun resolve(): String = withContext(Dispatchers.IO) {
-        for (domain in CANDIDATES) {
-            try {
-                val req = Request.Builder()
-                    .url("https://$domain/")
-                    .head()
-                    .header("User-Agent", "Mozilla/5.0")
-                    .build()
-                val resp = probeClient.newCall(req).execute()
-                if (resp.isSuccessful || resp.code in 301..399) {
-                    resp.close()
-                    return@withContext domain
+        val client = DriftHttpClient.get()
+
+        // Launch all probes in parallel
+        val results = coroutineScope {
+            CANDIDATES.map { domain ->
+                async {
+                    try {
+                        val req = Request.Builder()
+                            .url("https://$domain/")
+                            .head()
+                            .header("User-Agent", "Mozilla/5.0")
+                            .build()
+                        val resp = client.newCall(req).execute()
+                        val ok = resp.isSuccessful || resp.code in 301..399
+                        resp.close()
+                        if (ok) domain else null
+                    } catch (_: Exception) {
+                        null
+                    }
                 }
-                resp.close()
-            } catch (_: Exception) { /* next candidate */ }
+            }
+        }
+
+        // Return first successful (in CANDIDATES order for preference)
+        for ((i, deferred) in results.withIndex()) {
+            val result = deferred.await()
+            if (result != null) return@withContext result
         }
         CANDIDATES.first() // fallback
     }

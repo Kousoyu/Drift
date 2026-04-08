@@ -78,6 +78,9 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // ── Initialize shared HTTP client (connection pool + disk cache) ──
+        com.kousoyu.drift.data.DriftHttpClient.get(this)
+
         // ── Initialize source managers with app context ──
         SourceManager.init(this)
 

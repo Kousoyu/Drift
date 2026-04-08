@@ -37,7 +37,7 @@ class HttpEngine(
                 return res.body!!.string()
             } catch (e: IOException) {
                 lastError = e
-                if (attempt < retries) Thread.sleep(300L * (attempt + 1))  // 300ms, 600ms
+                if (attempt < retries) Thread.sleep(100L * (attempt + 1))  // 100ms, 200ms
             } catch (e: Exception) {
                 throw e  // Non-network error → don't retry
             }

@@ -2,11 +2,9 @@ package com.kousoyu.drift.data
 
 import android.content.Context
 import kotlinx.coroutines.flow.MutableStateFlow
-import okhttp3.OkHttpClient
 import com.kousoyu.drift.data.sources.ManhuaguiSource
 import com.kousoyu.drift.data.sources.CopyMangaSource
 import com.kousoyu.drift.data.sources.BaoziNativeSource
-import java.util.concurrent.TimeUnit
 
 /**
  * Central registry of all manga sources.
@@ -18,10 +16,7 @@ import java.util.concurrent.TimeUnit
  */
 object SourceManager {
 
-    private val client = OkHttpClient.Builder()
-        .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(12, TimeUnit.SECONDS)
-        .build()
+    // Uses shared DriftHttpClient for connection pool reuse + disk cache
 
     // Sources are lazily initialized after init() provides the context
     private lateinit var copyManga: CopyMangaSource
@@ -42,6 +37,7 @@ object SourceManager {
     fun init(context: Context) {
         if (initialized) return
         val appCtx = context.applicationContext
+        val client = DriftHttpClient.get(appCtx)
         copyManga  = CopyMangaSource(client, appCtx)
         baozi      = BaoziNativeSource(client)
         manhuagui  = ManhuaguiSource(client)
