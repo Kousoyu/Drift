@@ -25,6 +25,7 @@ public class NovelEntity {
     public String lastReadChapterName = null;
     public String lastReadChapterUrl = null;
     public int totalChapters = 0;
+    public long lastReadAt = 0;
 
     public long addedAt = System.currentTimeMillis();
 

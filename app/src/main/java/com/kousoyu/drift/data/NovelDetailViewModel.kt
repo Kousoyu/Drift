@@ -54,7 +54,7 @@ class NovelDetailViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun saveProgress(novelUrl: String, chapterName: String, chapterUrl: String) {
         viewModelScope.launch(Dispatchers.IO) {
-            dao.updateReadingProgressSync(novelUrl, chapterName, chapterUrl)
+            dao.updateReadingProgressSync(novelUrl, chapterName, chapterUrl, System.currentTimeMillis())
         }
     }
 }

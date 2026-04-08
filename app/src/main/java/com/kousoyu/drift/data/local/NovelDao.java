@@ -11,7 +11,9 @@ import java.util.List;
 
 @Dao
 public interface NovelDao {
-    @Query("SELECT * FROM novel_bookshelf ORDER BY addedAt DESC")
+    // Sort: recently-read first, then by addedAt
+    @Query("SELECT * FROM novel_bookshelf ORDER BY " +
+           "CASE WHEN lastReadAt > 0 THEN lastReadAt ELSE addedAt END DESC")
     Flow<List<NovelEntity>> getAllFavorites();
 
     @Query("SELECT * FROM novel_bookshelf WHERE detailUrl = :url LIMIT 1")
@@ -23,8 +25,11 @@ public interface NovelDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     void insertNovelSync(NovelEntity novel);
 
-    @Query("UPDATE novel_bookshelf SET lastReadChapterName = :chapterName, lastReadChapterUrl = :chapterUrl WHERE detailUrl = :novelUrl")
-    void updateReadingProgressSync(String novelUrl, String chapterName, String chapterUrl);
+    @Query("UPDATE novel_bookshelf SET lastReadChapterName = :chapterName, " +
+           "lastReadChapterUrl = :chapterUrl, lastReadAt = :timestamp " +
+           "WHERE detailUrl = :novelUrl")
+    void updateReadingProgressSync(String novelUrl, String chapterName,
+                                   String chapterUrl, long timestamp);
 
     @Query("UPDATE novel_bookshelf SET totalChapters = :count WHERE detailUrl = :novelUrl")
     void updateChapterCountSync(String novelUrl, int count);

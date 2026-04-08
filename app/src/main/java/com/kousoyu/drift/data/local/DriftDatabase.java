@@ -8,7 +8,7 @@ import androidx.room.RoomDatabase;
 import androidx.room.migration.Migration;
 import androidx.sqlite.db.SupportSQLiteDatabase;
 
-@Database(entities = {MangaEntity.class, NovelEntity.class}, version = 3, exportSchema = false)
+@Database(entities = {MangaEntity.class, NovelEntity.class}, version = 4, exportSchema = false)
 public abstract class DriftDatabase extends RoomDatabase {
     public abstract MangaDao mangaDao();
     public abstract NovelDao novelDao();
@@ -32,6 +32,14 @@ public abstract class DriftDatabase extends RoomDatabase {
                 + "PRIMARY KEY(`detailUrl`))");
         }
     };
+
+    // Migration 3→4: add lastReadAt column for smart sorting
+    static final Migration MIGRATION_3_4 = new Migration(3, 4) {
+        @Override
+        public void migrate(@NonNull SupportSQLiteDatabase database) {
+            database.execSQL("ALTER TABLE `novel_bookshelf` ADD COLUMN `lastReadAt` INTEGER NOT NULL DEFAULT 0");
+        }
+    };
     
     public static DriftDatabase getDatabase(Context context) {
         if (INSTANCE == null) {
@@ -39,7 +47,7 @@ public abstract class DriftDatabase extends RoomDatabase {
                 if (INSTANCE == null) {
                     INSTANCE = Room.databaseBuilder(context.getApplicationContext(),
                             DriftDatabase.class, "drift_database")
-                            .addMigrations(MIGRATION_2_3)
+                            .addMigrations(MIGRATION_2_3, MIGRATION_3_4)
                             .fallbackToDestructiveMigration()
                             .build();
                 }

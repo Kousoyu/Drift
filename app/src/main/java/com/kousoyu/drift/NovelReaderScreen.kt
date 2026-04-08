@@ -24,11 +24,17 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kousoyu.drift.data.NovelChapter
+import com.kousoyu.drift.data.NovelDetailViewModel
 import com.kousoyu.drift.data.NovelSourceManager
+import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlinx.coroutines.launch
 
 /**
- * Novel Reader Screen — tap-to-toggle UI, like the manga reader.
- * Chapter content is cached so prev/next is instant on revisit.
+ * Novel Reader Screen — tap-to-toggle UI.
+ * - Persists reading progress to Room (bookshelf novels)
+ * - Caches chapter content in memory (LRU 10)
+ * - Preloads next chapter for zero-latency page turns
+ * - Remembers scroll position per chapter
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,11 +46,13 @@ fun NovelReaderScreen(
     onNavigateChapter: ((chapterUrl: String, chapterName: String) -> Unit)? = null
 ) {
     val source = NovelSourceManager.currentSource.collectAsState().value
+    val detailVm: NovelDetailViewModel = viewModel()
     var content by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var showMenu by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
+    val coroutineScope = rememberCoroutineScope()
 
     val decodedUrl = remember(chapterUrl) { java.net.URLDecoder.decode(chapterUrl, "UTF-8") }
     val decodedName = remember(chapterName) { java.net.URLDecoder.decode(chapterName, "UTF-8") }
@@ -56,11 +64,14 @@ fun NovelReaderScreen(
     val hasPrev = currentIndex > 0
     val hasNext = currentIndex in 0 until allChapters.size - 1
 
-    // Load chapter content — uses cache if available
+    // ── Load chapter content ──
     LaunchedEffect(chapterUrl) {
         loading = true; error = null; content = null
-        scrollState.scrollTo(0)
         showMenu = false
+
+        // Restore scroll position or reset
+        val savedScroll = NovelScrollCache.get(decodedUrl)
+        scrollState.scrollTo(savedScroll)
 
         // Cache hit → instant
         NovelContentCache.get(decodedUrl)?.let {
@@ -76,9 +87,43 @@ fun NovelReaderScreen(
             .onFailure { error = it.message; loading = false }
     }
 
-    // Save reading position
+    // ── Save reading progress to Room (persistent) ──
     LaunchedEffect(decodedUrl) {
-        NovelReadingProgress.save(decodedUrl, decodedName)
+        // Extract novel URL from chapter URL for Room lookup
+        val novelUrl = extractNovelBaseUrl(decodedUrl)
+        if (novelUrl.isNotEmpty()) {
+            detailVm.saveProgress(novelUrl, decodedName, decodedUrl)
+        }
+    }
+
+    // ── Preload next chapter ──
+    LaunchedEffect(decodedUrl) {
+        if (hasNext) {
+            val nextUrl = allChapters[currentIndex + 1].url
+            if (NovelContentCache.get(nextUrl) == null) {
+                source.getChapterContent(nextUrl).onSuccess { NovelContentCache.put(nextUrl, it) }
+            }
+        }
+    }
+
+    // ── Save scroll position on leave ──
+    DisposableEffect(decodedUrl) {
+        onDispose {
+            NovelScrollCache.put(decodedUrl, scrollState.value)
+        }
+    }
+
+    // ── Retry function ──
+    fun retry() {
+        coroutineScope.launch {
+            loading = true; error = null
+            source.getChapterContent(decodedUrl)
+                .onSuccess {
+                    content = it; loading = false
+                    NovelContentCache.put(decodedUrl, it)
+                }
+                .onFailure { error = it.message; loading = false }
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -114,7 +159,10 @@ fun NovelReaderScreen(
                             textAlign = TextAlign.Center,
                             modifier = Modifier.padding(horizontal = 40.dp))
                         Spacer(Modifier.height(16.dp))
-                        OutlinedButton(onClick = onBack) { Text("返回") }
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            OutlinedButton(onClick = { retry() }) { Text("重试") }
+                            TextButton(onClick = onBack) { Text("返回") }
+                        }
                     }
                 }
             }
@@ -265,30 +313,26 @@ object NovelContentCache {
 }
 
 /**
- * Simple in-memory reading progress tracker.
- * Stores the last-read chapter URL and name per novel.
+ * Scroll position cache per chapter — survives prev/next navigation.
  */
-object NovelReadingProgress {
-    private val progress = mutableMapOf<String, Pair<String, String>>()
+object NovelScrollCache {
+    private const val MAX = 10
+    private val cache = LinkedHashMap<String, Int>(MAX + 2, 0.75f, true)
 
-    fun save(chapterUrl: String, chapterName: String) {
-        val novelKey = extractNovelKey(chapterUrl)
-        if (novelKey.isNotEmpty()) {
-            progress[novelKey] = chapterUrl to chapterName
-        }
+    fun get(url: String): Int = cache[url] ?: 0
+    fun put(url: String, position: Int) {
+        cache[url] = position
+        while (cache.size > MAX) cache.remove(cache.keys.first())
     }
+}
 
-    fun get(detailUrl: String): Pair<String, String>? {
-        val key = extractNovelKey(detailUrl)
-        return progress[key]
-    }
-
-    private fun extractNovelKey(url: String): String {
-        val path = url.substringAfter(".com", url)
-        val parts = path.split("/")
-        val novelIdx = parts.indexOf("novel")
-        return if (novelIdx >= 0 && novelIdx + 1 < parts.size) {
-            "/novel/${parts[novelIdx + 1]}"
-        } else ""
-    }
+/**
+ * Extract the novel base URL from a chapter URL for Room progress lookup.
+ * e.g. "https://www.linovelib.com/novel/8/25131.html" → "https://www.linovelib.com/novel/8.html"
+ */
+private fun extractNovelBaseUrl(chapterUrl: String): String {
+    // Pattern: .../novel/{id}/{chapterId}.html → .../novel/{id}.html
+    val regex = Regex("(https?://[^/]+/novel/\\d+)")
+    val match = regex.find(chapterUrl)
+    return match?.groupValues?.get(1)?.let { "$it.html" } ?: ""
 }

@@ -86,9 +86,13 @@ fun NovelDetailScreen(
         if (isReversed) flat.reversed() else flat
     }
 
-    // Reading progress
-    val decodedUrl = remember(detailUrl) { java.net.URLDecoder.decode(detailUrl, "UTF-8") }
-    val lastRead = NovelReadingProgress.get(decodedUrl)
+    // Reading progress from Room (persistent across app restarts)
+    val lastRead = remember(localNovel) {
+        val ln = localNovel
+        if (ln?.lastReadChapterUrl != null && ln.lastReadChapterName != null) {
+            ln.lastReadChapterUrl to ln.lastReadChapterName!!
+        } else null
+    }
 
     Scaffold(
         topBar = {
