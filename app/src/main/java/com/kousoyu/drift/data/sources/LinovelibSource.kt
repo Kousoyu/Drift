@@ -104,56 +104,69 @@ class LinovelibSource(
     override suspend fun getChapterContent(chapterUrl: String): Result<String> = runCatching {
         val parts = mutableListOf<String>()
         var currentUrl = chapterUrl
-        // Extract chapter base ID to detect when we've left this chapter
-        val chapterBase = currentUrl.substringAfterLast("/").substringBefore(".html").substringBefore("_")
-        val maxPages = 30 // safety limit
+        // Normalize: extract just the last path segment's numeric base
+        // e.g. "https://...bilinovel.com/novel/75/11067.html" → "11067"
+        // e.g. "/novel/75/11067_3.html" → "11067"
+        fun extractBase(url: String): String =
+            url.substringAfterLast("/").substringBefore(".html").substringBefore("_")
+
+        val chapterBase = extractBase(currentUrl)
+        val maxPages = 30
 
         for (i in 0 until maxPages) {
             val html = fetch(currentUrl)
             val doc = Jsoup.parse(html, baseUrl)
 
-            val content = doc.selectFirst("#acontent, .read-content, .chapter-content, #TextContent")
+            val content = doc.selectFirst("#acontent, #TextContent, .read-content, .chapter-content")
             if (content != null) {
-                // Clean ads/scripts
-                content.select("script, .google-auto-placed, .adsbygoogle, ins, .tp-box, style, .cgo, .ca1, .ca2").remove()
+                // Clean ads/scripts/navigation junk
+                content.select("script, .google-auto-placed, .adsbygoogle, ins, .tp-box, style, .cgo, .ca1, .ca2, .chapter-nav, .mlfy_main_top, .mlfy_main_bottom").remove()
 
-                // Extract text with proper paragraph formatting
+                // Extract paragraphs
                 val paragraphs = mutableListOf<String>()
                 for (node in content.children()) {
                     val text = node.text().trim()
                     if (text.isNotEmpty()) paragraphs.add(text)
                 }
-                // If no children with text, fall back to br-split
+                // Fallback: if content has no child elements, use br as separator
                 if (paragraphs.isEmpty()) {
                     content.select("br").append("|||BR|||")
-                    val raw = content.text()
-                    paragraphs.addAll(raw.split("|||BR|||").map { it.trim() }.filter { it.isNotEmpty() })
+                    paragraphs.addAll(
+                        content.text().split("|||BR|||")
+                            .map { it.trim() }.filter { it.isNotEmpty() }
+                    )
+                }
+                // Fallback: raw text if still empty
+                if (paragraphs.isEmpty()) {
+                    val raw = content.text().trim()
+                    if (raw.isNotEmpty()) paragraphs.add(raw)
                 }
 
                 parts.addAll(paragraphs)
             }
 
-            // Find next page URL from ReadParams
+            // Find next page from ReadParams
             val nextUrl = Regex("url_next:'([^']+)'").find(html)?.groupValues?.get(1) ?: break
-            val nextBase = nextUrl.substringAfterLast("/").substringBefore(".html").substringBefore("_")
 
             // If next URL points to a different chapter → we've read all pages
-            if (nextBase != chapterBase) break
+            if (extractBase(nextUrl) != chapterBase) break
 
             currentUrl = nextUrl
         }
 
-        // Join with proper paragraph spacing, clean up junk
-        parts.joinToString("\n\n")
-            .replace(Regex("【如需繼續閱讀[^】]*】?"), "")
-            .replace(Regex("如需繼續閱讀.*"), "")
-            .replace(Regex("【?如需继续阅读[^】]*】?"), "")
-            .replace(Regex("\\[Chrome瀏覽器\\].*"), "")
-            .replace(Regex("www\\.bilino?vel\\.com"), "")
-            .replace(Regex("【\\s*$"), "")   // lone bracket at end
-            .replace(Regex("】\\s*$"), "")   // lone bracket at end
-            .replace(Regex("\n{3,}"), "\n\n")
-            .trim()
+        // Clean each paragraph individually, then join
+        parts.map { p ->
+            p.replace(Regex("【如需繼續閱讀[^】]*】?"), "")
+             .replace(Regex("如需繼續閱讀.*"), "")
+             .replace(Regex("【?如需继续阅读[^】]*】?"), "")
+             .replace(Regex("\\[Chrome瀏覽器\\].*"), "")
+             .replace(Regex("www\\.bilino?vel\\.com"), "")
+             .replace(Regex("^[【】\\s]+$"), "")  // lone brackets
+             .trim()
+        }.filter { it.isNotEmpty() }
+         .joinToString("\n\n")
+         .replace(Regex("\n{3,}"), "\n\n")
+         .trim()
     }
 
     override fun getHeaders(): Map<String, String> = mapOf(
