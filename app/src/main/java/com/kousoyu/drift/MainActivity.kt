@@ -81,6 +81,9 @@ class MainActivity : ComponentActivity() {
         // ── Initialize shared HTTP client (connection pool + disk cache) ──
         com.kousoyu.drift.data.DriftHttpClient.get(this)
 
+        // ── Preconnect to source domains (DNS + TCP + TLS warmup) ──
+        Thread { com.kousoyu.drift.data.DriftHttpClient.preconnect() }.start()
+
         // ── Initialize source managers with app context ──
         SourceManager.init(this)
 
