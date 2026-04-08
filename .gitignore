@@ -1,19 +1,27 @@
+# ── Android / Gradle ──
 *.iml
-.gradle
+.gradle/
+/build/
+/app/build/
 /local.properties
-/.idea/caches
-/.idea/libraries
-/.idea/modules.xml
-/.idea/workspace.xml
-/.idea/navEditor.xml
-/.idea/assetWizardSettings.xml
-.DS_Store
-/build
-/captures
-.externalNativeBuild
-.cxx
 local.properties
+.externalNativeBuild/
+.cxx/
+/captures/
 
+# ── IDE ──
 .idea/
+.DS_Store
+.kotlin/
+
+# ── Release signing ──
 drift-release.keystore
 *.jks
+
+# ── Temp / test files ──
+*.py
+*.html
+*.log
+*.json
+!gradle/**
+!app/src/**
