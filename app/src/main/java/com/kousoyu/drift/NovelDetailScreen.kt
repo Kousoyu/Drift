@@ -66,8 +66,9 @@ fun NovelDetailScreen(
     LaunchedEffect(detailUrl) {
         val url = java.net.URLDecoder.decode(detailUrl, "UTF-8")
         detailCache[url]?.let { cached ->
-            // Invalidate if old cache has no description or un-split volumes
-            if (cached.description.isNotEmpty() && cached.volumes.size > 1) {
+            // Invalidate if stale: no description, single volume, or no volume covers
+            val hasCoverIssue = cached.volumes.size > 1 && cached.volumes.all { it.coverUrl.isEmpty() }
+            if (cached.description.isNotEmpty() && cached.volumes.size > 1 && !hasCoverIssue) {
                 detail = cached; loading = false; return@LaunchedEffect
             } else {
                 detailCache.remove(url) // stale, re-fetch

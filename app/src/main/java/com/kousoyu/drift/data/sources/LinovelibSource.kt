@@ -232,28 +232,42 @@ class LinovelibSource(
     private fun parseCatalog(doc: org.jsoup.nodes.Document, fallbackTitle: String): List<NovelVolume> {
         val volumes = mutableListOf<NovelVolume>()
 
-        // ── Strategy 1: Desktop — div.volume (sibling <ul>) ──
+        // ── Strategy 1: Desktop — div.volume (章节可能在内部或兄弟) ──
         val volumeDivs = doc.select("div.volume")
         if (volumeDivs.isNotEmpty()) {
             for (volDiv in volumeDivs) {
                 val volName = volDiv.selectFirst("h2 a, h2")?.text()?.trim() ?: "未知卷"
                 val volCover = volDiv.selectFirst("img[data-original]")?.attr("data-original")
                     ?: volDiv.selectFirst("img[data-src]")?.attr("data-src") ?: ""
-                var sibling = volDiv.nextElementSibling()
                 val chapters = mutableListOf<NovelChapter>()
-                while (sibling != null) {
-                    if (sibling.hasClass("volume")) break
-                    if (sibling.tagName() == "ul") {
-                        sibling.select("li a").forEach { a ->
-                            val href = a.attr("href")
-                            if (href.isNotBlank() && !href.startsWith("javascript") && !href.contains("vol_")) {
-                                val text = a.text().trim()
-                                if (text.isNotBlank()) chapters.add(NovelChapter(name = text, url = absUrl(href)))
+
+                // First: look for <ul> INSIDE the volume div (current bilinovel structure)
+                volDiv.select("ul li a").forEach { a ->
+                    val href = a.attr("href")
+                    if (href.isNotBlank() && !href.startsWith("javascript") && !href.contains("vol_")) {
+                        val text = a.text().trim()
+                        if (text.isNotBlank()) chapters.add(NovelChapter(name = text, url = absUrl(href)))
+                    }
+                }
+
+                // Fallback: look for sibling <ul> (older layout)
+                if (chapters.isEmpty()) {
+                    var sibling = volDiv.nextElementSibling()
+                    while (sibling != null) {
+                        if (sibling.hasClass("volume")) break
+                        if (sibling.tagName() == "ul") {
+                            sibling.select("li a").forEach { a ->
+                                val href = a.attr("href")
+                                if (href.isNotBlank() && !href.startsWith("javascript") && !href.contains("vol_")) {
+                                    val text = a.text().trim()
+                                    if (text.isNotBlank()) chapters.add(NovelChapter(name = text, url = absUrl(href)))
+                                }
                             }
                         }
+                        sibling = sibling.nextElementSibling()
                     }
-                    sibling = sibling.nextElementSibling()
                 }
+
                 if (chapters.isNotEmpty()) volumes.add(NovelVolume(name = volName, coverUrl = absUrl(volCover), chapters = chapters))
             }
         }
