@@ -2,6 +2,8 @@ package com.kousoyu.drift.data.sources
 
 import com.kousoyu.drift.data.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -67,13 +69,47 @@ class LinovelibSource(
         parseNovelList(html)
     }
 
-    // ─── Search ─────────────────────────────────────────────────────────────
+    // ─── Search (catalog-based: CF blocks /search.html) ────────────────────
+
+    // Cached novel index from catalog pages — built once, reused across searches
+    private var catalogIndex: List<NovelItem>? = null
+    private var indexBuildTime = 0L
 
     override suspend fun searchNovel(query: String): Result<List<NovelItem>> = runCatching {
-        val q = java.net.URLEncoder.encode(query.trim(), "UTF-8")
-        // /search.html is Cloudflare-protected; /?s= works without CF challenge
-        val html = fetch("/?s=$q", DESKTOP_UA)
-        parseNovelList(html)
+        val q = query.trim().lowercase()
+
+        // Build index if stale (older than 30 min) or missing
+        val now = System.currentTimeMillis()
+        if (catalogIndex == null || (now - indexBuildTime) > 30 * 60 * 1000) {
+            catalogIndex = buildCatalogIndex()
+            indexBuildTime = now
+        }
+
+        // Client-side keyword filter
+        catalogIndex!!.filter { novel ->
+            q in novel.title.lowercase() ||
+            q in novel.author.lowercase()
+        }
+    }
+
+    /**
+     * Parallel-scrape catalog pages to build a searchable index.
+     * 30 pages × ~16 novels = ~480 novels in ~3s.
+     * Covers all popular/recent titles.
+     */
+    private suspend fun buildCatalogIndex(): List<NovelItem> = coroutineScope {
+        val pages = 30
+        val deferreds = (1..pages).map { page ->
+            async(Dispatchers.IO) {
+                try {
+                    val html = fetch("/novel/$page.html", DESKTOP_UA)
+                    parseNovelList(html)
+                } catch (_: Exception) {
+                    emptyList()
+                }
+            }
+        }
+        deferreds.flatMap { it.await() }.distinctBy { it.detailUrl }
     }
 
     // ─── Detail + Catalog ───────────────────────────────────────────────────
