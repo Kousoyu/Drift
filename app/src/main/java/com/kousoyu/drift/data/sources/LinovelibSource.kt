@@ -13,7 +13,8 @@ import org.jsoup.Jsoup
  * All endpoints tested CF-free (2026-04-08):
  *   ✅ Homepage, Rankings, Catalog, Chapter Content — all pure HTTP.
  *
- * Domain resolved dynamically via DomainResolver.
+ * Key: Chapters are paginated (11067.html → 11067_2.html → …).
+ *      We fetch ALL pages and merge them.
  */
 class LinovelibSource(
     private val client: OkHttpClient
@@ -81,11 +82,11 @@ class LinovelibSource(
         val title  = sel(doc, "h1", "h2.book-title", ".book-title") ?: "未知标题"
         val author = sel(doc, ".book-rand-a a", ".author a") ?: ""
         val cover  = selAttr(doc, "src", ".book-img img", ".book-cover img")
+            ?: selAttr(doc, "data-src", ".book-img img", ".book-cover img")
             ?: selAttr(doc, "content", "meta[property=og:image]") ?: ""
         val desc   = sel(doc, ".book-dec p", ".book-info-detail .book-dec") ?: ""
         val status = sel(doc, ".book-label span", "span.state") ?: ""
 
-        // Fetch catalog (also CF-free!)
         val novelId = detailUrl.substringAfterLast("/novel/").substringBefore(".html")
         val catalogHtml = fetch("/novel/$novelId/catalog")
         val catalogDoc = Jsoup.parse(catalogHtml, baseUrl)
@@ -98,21 +99,54 @@ class LinovelibSource(
         )
     }
 
-    // ─── Chapter Content ────────────────────────────────────────────────────
+    // ─── Chapter Content (multi-page merge) ─────────────────────────────────
 
     override suspend fun getChapterContent(chapterUrl: String): Result<String> = runCatching {
-        val html = fetch(chapterUrl)
-        val doc = Jsoup.parse(html, baseUrl)
+        val parts = mutableListOf<String>()
+        var currentUrl = chapterUrl
+        // Extract chapter base ID to detect when we've left this chapter
+        val chapterBase = currentUrl.substringAfterLast("/").substringBefore(".html").substringBefore("_")
+        val maxPages = 30 // safety limit
 
-        val content = doc.selectFirst("#acontent, .read-content, .chapter-content, #TextContent")
-            ?: error("未找到章节内容")
+        for (i in 0 until maxPages) {
+            val html = fetch(currentUrl)
+            val doc = Jsoup.parse(html, baseUrl)
 
-        content.select("script, .google-auto-placed, .adsbygoogle, ins, .tp-box, style").remove()
-        content.select("br").append("\n")
-        content.select("p").prepend("\n")
+            val content = doc.selectFirst("#acontent, .read-content, .chapter-content, #TextContent")
+            if (content != null) {
+                // Clean ads/scripts
+                content.select("script, .google-auto-placed, .adsbygoogle, ins, .tp-box, style, .cgo, .ca1, .ca2").remove()
 
-        content.text()
-            .replace("\\n", "\n")
+                // Extract text with proper paragraph formatting
+                val paragraphs = mutableListOf<String>()
+                for (node in content.children()) {
+                    val text = node.text().trim()
+                    if (text.isNotEmpty()) paragraphs.add(text)
+                }
+                // If no children with text, fall back to br-split
+                if (paragraphs.isEmpty()) {
+                    content.select("br").append("|||BR|||")
+                    val raw = content.text()
+                    paragraphs.addAll(raw.split("|||BR|||").map { it.trim() }.filter { it.isNotEmpty() })
+                }
+
+                parts.addAll(paragraphs)
+            }
+
+            // Find next page URL from ReadParams
+            val nextUrl = Regex("url_next:'([^']+)'").find(html)?.groupValues?.get(1) ?: break
+            val nextBase = nextUrl.substringAfterLast("/").substringBefore(".html").substringBefore("_")
+
+            // If next URL points to a different chapter → we've read all pages
+            if (nextBase != chapterBase) break
+
+            currentUrl = nextUrl
+        }
+
+        // Join with proper paragraph spacing, clean up junk
+        parts.joinToString("\n\n")
+            .replace(Regex("如需繼續閱讀.*?bilinovel\\.com[】]?"), "")
+            .replace(Regex("【如需.*?瀏覽器[】]?.*"), "")
             .replace(Regex("\n{3,}"), "\n\n")
             .trim()
     }
@@ -127,7 +161,6 @@ class LinovelibSource(
     private fun parseNovelList(html: String): List<NovelItem> {
         val doc = Jsoup.parse(html, baseUrl)
 
-        // Structured book items
         val bookItems = doc.select(".book-li, .rank-book-list li, .book-layout, .book-item")
         if (bookItems.isNotEmpty()) {
             return bookItems.mapNotNull { el ->
@@ -139,8 +172,11 @@ class LinovelibSource(
                 val href = absUrl(linkEl.attr("href"))
                 if (!href.contains("/novel/")) return@mapNotNull null
 
-                val cover = el.selectFirst("img")?.let {
-                    absUrl(it.attr("src").ifEmpty { it.attr("data-src") })
+                // Cover: try data-src first (lazy-loaded), then src
+                val cover = el.selectFirst("img")?.let { img ->
+                    val dataSrc = img.attr("data-src").trim()
+                    val src = img.attr("src").trim()
+                    absUrl(dataSrc.ifEmpty { src })
                 } ?: ""
                 val author = el.selectFirst(".author a, .book-author")?.text()?.trim() ?: ""
 
@@ -149,7 +185,7 @@ class LinovelibSource(
             }.distinctBy { it.detailUrl }
         }
 
-        // Fallback: generic links
+        // Fallback
         return doc.select("a[href*=/novel/]").mapNotNull { a ->
             val href = absUrl(a.attr("href"))
             if (!href.matches(Regex(".*/novel/\\d+\\.html$"))) return@mapNotNull null
@@ -181,11 +217,11 @@ class LinovelibSource(
             }
         }
 
-        // Fallback
         if (volumes.isEmpty()) {
             val allChapters = doc.select("a[href]").mapNotNull { a ->
                 val href = a.attr("href")
                 if (!href.contains("/novel/") || href.endsWith("/catalog") || !href.endsWith(".html")) return@mapNotNull null
+                if (href.startsWith("javascript")) return@mapNotNull null
                 val path = href.substringAfter("/novel/")
                 if (!path.contains("/")) return@mapNotNull null
                 val text = a.text().trim()
