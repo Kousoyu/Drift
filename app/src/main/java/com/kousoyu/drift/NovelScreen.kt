@@ -58,10 +58,8 @@ fun NovelScreen(
         derivedStateOf { listState.firstVisibleItemIndex > 3 }
     }
 
-    // Load on first composition
-    LaunchedEffect(currentSource) {
-        novelViewModel.loadPopular()
-    }
+
+
 
     Box(modifier = Modifier.fillMaxSize()) {
         LazyColumn(
