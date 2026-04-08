@@ -71,7 +71,8 @@ class LinovelibSource(
 
     override suspend fun searchNovel(query: String): Result<List<NovelItem>> = runCatching {
         val q = java.net.URLEncoder.encode(query.trim(), "UTF-8")
-        val html = fetch("/search.html?searchkey=$q")
+        // /search.html is Cloudflare-protected; /?s= works without CF challenge
+        val html = fetch("/?s=$q", DESKTOP_UA)
         parseNovelList(html)
     }
 

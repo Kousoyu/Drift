@@ -1,25 +1,40 @@
-import requests, re
+import requests
+from bs4 import BeautifulSoup
 
-headers = {'User-Agent': 'Mozilla/5.0 (Linux; Android 11; SM-G991B) AppleWebKit/537.36'}
-r = requests.get('https://www.baozimh.org/?s=%E4%BD%A0', headers=headers, timeout=12)
-print('Status:', r.status_code, 'Length:', len(r.text))
+desktop_ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 
-# Save to file for inspection
-with open('search_result.html', 'w', encoding='utf-8') as f:
-    f.write(r.text)
+r = requests.get('https://www.linovelib.com/?s=%E6%95%99%E5%AE%A4', headers={'User-Agent': desktop_ua}, timeout=10)
+soup = BeautifulSoup(r.text, 'html.parser')
 
-# Find manga links
-links = re.findall(r'href="(/manga/[^"]+)"', r.text)
-print('manga links:', len(links), links[:5])
+# Look for search result containers
+print("=== Search result structure ===")
+# Common patterns: .search-result, .book-list, .search-list, .result-list
+for sel in ['.search-result', '.book-list', '.search-list', '.result-list', '.book-ol', '#search-result', '.hot-article']:
+    found = soup.select(sel)
+    if found:
+        print(f'\n{sel}: {len(found)} elements')
+        for el in found[:2]:
+            print(str(el)[:500])
 
-# Find any link with common search result wrappers
-links2 = re.findall(r'<article[^>]*>.*?href="([^"]+)"[^>]*>([^<]+)', r.text[:50000], re.DOTALL)
-print('article links:', len(links2), links2[:3])
-
-# Look for img tags in potential result blocks
-covers = re.findall(r'<img[^>]+src="([^"]+)"[^>]+class="[^"]*wp-post-image[^"]*"', r.text)
-print('cover imgs:', len(covers), covers[:3])
-
-# Check for any href patterns matching manga
-all_hrefs = re.findall(r'href="(https://www\.baozimh\.org[^"]+)"', r.text)
-print('full baozimh hrefs:', len(all_hrefs), all_hrefs[:10])
+# Just show all <a href="/novel/N.html"> with their parent context
+print("\n=== Novel detail links ===")
+import re
+for a in soup.select('a'):
+    href = a.get('href', '')
+    if re.match(r'/novel/\d+\.html$', href):
+        text = a.get_text(strip=True)
+        parent = a.parent
+        # Look for cover img nearby
+        container = a.find_parent(['div', 'li', 'article'])
+        cover = ''
+        author = ''
+        if container:
+            img = container.select_one('img')
+            if img:
+                cover = img.get('data-original', '') or img.get('data-src', '') or img.get('src', '')
+            auth = container.select_one('.author a, .book-author')
+            if auth:
+                author = auth.get_text(strip=True)
+        print(f'  "{text}" href={href} cover={cover} author={author}')
+        if container:
+            print(f'    Container: <{container.name} class="{container.get("class")}">')

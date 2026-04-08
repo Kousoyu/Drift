@@ -126,7 +126,10 @@ fun NovelReaderScreen(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(modifier = Modifier
+        .fillMaxSize()
+        .background(MaterialTheme.colorScheme.background)
+    ) {
         // ── Main content area (tappable to toggle menu) ──
         when {
             loading -> {
