@@ -28,6 +28,8 @@ class LinovelibSource(
 
     private val UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) " +
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+    private val DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
 
     // ─── Init domain ────────────────────────────────────────────────────────
 
@@ -39,14 +41,14 @@ class LinovelibSource(
 
     // ─── HTTP ───────────────────────────────────────────────────────────────
 
-    private suspend fun fetch(path: String): String = withContext(Dispatchers.IO) {
+    private suspend fun fetch(path: String, ua: String = UA): String = withContext(Dispatchers.IO) {
         ensureDomain()
         val url = if (path.startsWith("http")) path
                   else "https://$resolvedDomain/${path.trimStart('/')}"
 
         val request = Request.Builder()
             .url(url)
-            .header("User-Agent", UA)
+            .header("User-Agent", ua)
             .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
             .header("Accept-Language", "zh-CN,zh;q=0.9")
             .header("Referer", "https://$resolvedDomain/")
@@ -93,7 +95,8 @@ class LinovelibSource(
         val status = sel(doc, ".book-label span", "span.state") ?: ""
 
         val novelId = detailUrl.substringAfterLast("/novel/").substringBefore(".html")
-        val catalogHtml = fetch("/novel/$novelId/catalog")
+        // Catalog: use DESKTOP UA to get div.volume with cover images
+        val catalogHtml = fetch("/novel/$novelId/catalog", DESKTOP_UA)
         val catalogDoc = Jsoup.parse(catalogHtml, baseUrl)
         val volumes = parseCatalog(catalogDoc, title)
 
