@@ -1,44 +1,63 @@
 package com.kousoyu.drift.data.sources
 
-import android.content.Context
 import com.kousoyu.drift.data.*
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import org.jsoup.Jsoup
 
 /**
- * 哔哩轻小说 (linovelib.com) — Light Novel source.
+ * 哔哩轻小说 — Pure OkHttp + Jsoup. No WebView. No Cloudflare bypass.
  *
- * Uses CloudflareBypass (WebView) for all requests —
- * no cookie management needed, just direct HTML extraction.
+ * All endpoints tested CF-free (2026-04-08):
+ *   ✅ Homepage, Rankings, Catalog, Chapter Content — all pure HTTP.
  *
- * URL patterns:
- *   Popular:  /top/monthvisit/1.html
- *   Search:   /search.html?searchkey={query}
- *   Detail:   /novel/{id}.html
- *   Catalog:  /novel/{id}/catalog
- *   Chapter:  /novel/{id}/{chapterId}.html
+ * Domain resolved dynamically via DomainResolver.
  */
 class LinovelibSource(
-    private val client: OkHttpClient,
-    context: Context
+    private val client: OkHttpClient
 ) : NovelSource {
 
-    override val name    = "哔哩轻小说"
-    override val baseUrl = "https://www.linovelib.com"
+    override val name = "哔哩轻小说"
+    override val baseUrl: String get() = "https://${resolvedDomain ?: FALLBACK}"
 
-    private val cfBypass = CloudflareBypass(context.applicationContext)
+    private var resolvedDomain: String? = null
+    private val FALLBACK = "www.bilinovel.com"
 
-    // ─── WebView-based fetch ────────────────────────────────────────────────
+    private val UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) " +
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
 
-    private suspend fun fetch(path: String): String {
-        val url = if (path.startsWith("http")) path
-                  else "${baseUrl.trimEnd('/')}/${path.trimStart('/')}"
-        return cfBypass.fetchHtml(url)
+    // ─── Init domain ────────────────────────────────────────────────────────
+
+    private suspend fun ensureDomain() {
+        if (resolvedDomain == null) {
+            resolvedDomain = DomainResolver.get()
+        }
     }
 
-    // ─── Popular ────────────────────────────────────────────────────────────
+    // ─── HTTP ───────────────────────────────────────────────────────────────
+
+    private suspend fun fetch(path: String): String = withContext(Dispatchers.IO) {
+        ensureDomain()
+        val url = if (path.startsWith("http")) path
+                  else "https://$resolvedDomain/${path.trimStart('/')}"
+
+        val request = Request.Builder()
+            .url(url)
+            .header("User-Agent", UA)
+            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .header("Accept-Language", "zh-CN,zh;q=0.9")
+            .header("Referer", "https://$resolvedDomain/")
+            .build()
+
+        client.newCall(request).execute().use { resp ->
+            if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}")
+            resp.body?.string() ?: throw Exception("Empty response")
+        }
+    }
+
+    // ─── Popular (排行榜) ───────────────────────────────────────────────────
 
     override suspend fun getPopularNovels(): Result<List<NovelItem>> = runCatching {
         val html = fetch("/top/monthvisit/1.html")
@@ -53,36 +72,29 @@ class LinovelibSource(
         parseNovelList(html)
     }
 
-    // ─── Detail ─────────────────────────────────────────────────────────────
+    // ─── Detail + Catalog ───────────────────────────────────────────────────
 
     override suspend fun getNovelDetail(detailUrl: String): Result<NovelDetail> = runCatching {
         val html = fetch(detailUrl)
         val doc = Jsoup.parse(html, baseUrl)
 
-        // Multiple fallback selectors for resilience
         val title  = sel(doc, "h1", "h2.book-title", ".book-title") ?: "未知标题"
-        val author = sel(doc, ".book-rand-a a", ".author a", "span:contains(作者) + a") ?: ""
+        val author = sel(doc, ".book-rand-a a", ".author a") ?: ""
         val cover  = selAttr(doc, "src", ".book-img img", ".book-cover img")
             ?: selAttr(doc, "content", "meta[property=og:image]") ?: ""
-        val desc   = sel(doc, ".book-dec p", ".book-info-detail .book-dec",
-                         "meta[name=description]") ?: ""
-        val status = sel(doc, ".book-label span", "span.state", ".book-label .color1") ?: ""
+        val desc   = sel(doc, ".book-dec p", ".book-info-detail .book-dec") ?: ""
+        val status = sel(doc, ".book-label span", "span.state") ?: ""
 
-        // Fetch catalog
+        // Fetch catalog (also CF-free!)
         val novelId = detailUrl.substringAfterLast("/novel/").substringBefore(".html")
         val catalogHtml = fetch("/novel/$novelId/catalog")
         val catalogDoc = Jsoup.parse(catalogHtml, baseUrl)
-
         val volumes = parseCatalog(catalogDoc, title)
 
         NovelDetail(
-            url = detailUrl,
-            title = title,
-            author = author,
-            coverUrl = absUrl(cover),
-            description = desc,
-            status = status,
-            volumes = volumes
+            url = detailUrl, title = title, author = author,
+            coverUrl = absUrl(cover), description = desc,
+            status = status, volumes = volumes
         )
     }
 
@@ -95,7 +107,6 @@ class LinovelibSource(
         val content = doc.selectFirst("#acontent, .read-content, .chapter-content, #TextContent")
             ?: error("未找到章节内容")
 
-        // Clean up
         content.select("script, .google-auto-placed, .adsbygoogle, ins, .tp-box, style").remove()
         content.select("br").append("\n")
         content.select("p").prepend("\n")
@@ -107,7 +118,7 @@ class LinovelibSource(
     }
 
     override fun getHeaders(): Map<String, String> = mapOf(
-        "User-Agent" to CloudflareBypass.UA,
+        "User-Agent" to UA,
         "Referer" to "$baseUrl/"
     )
 
@@ -116,7 +127,7 @@ class LinovelibSource(
     private fun parseNovelList(html: String): List<NovelItem> {
         val doc = Jsoup.parse(html, baseUrl)
 
-        // Strategy 1: Structured book items
+        // Structured book items
         val bookItems = doc.select(".book-li, .rank-book-list li, .book-layout, .book-item")
         if (bookItems.isNotEmpty()) {
             return bookItems.mapNotNull { el ->
@@ -132,36 +143,27 @@ class LinovelibSource(
                     absUrl(it.attr("src").ifEmpty { it.attr("data-src") })
                 } ?: ""
                 val author = el.selectFirst(".author a, .book-author")?.text()?.trim() ?: ""
-                val status = el.selectFirst(".book-label span, .status")?.text()?.trim() ?: ""
 
-                NovelItem(
-                    title = title, author = author, coverUrl = cover,
-                    detailUrl = href, status = status, sourceName = name
-                )
+                NovelItem(title = title, author = author, coverUrl = cover,
+                    detailUrl = href, sourceName = name)
             }.distinctBy { it.detailUrl }
         }
 
-        // Strategy 2: Generic link extraction (less reliable but catches edge cases)
+        // Fallback: generic links
         return doc.select("a[href*=/novel/]").mapNotNull { a ->
             val href = absUrl(a.attr("href"))
             if (!href.matches(Regex(".*/novel/\\d+\\.html$"))) return@mapNotNull null
             val title = a.text().trim()
             if (title.length < 2) return@mapNotNull null
-            val skipList = setOf("首页", "分类", "排行", "全本", "文库", "登录", "注册",
-                                 "立即阅读", "开始阅读", "更多")
-            if (title in skipList) return@mapNotNull null
-
-            NovelItem(
-                title = title, author = "", coverUrl = "",
-                detailUrl = href, sourceName = name
-            )
+            val skip = setOf("首页", "分类", "排行", "全本", "文库", "登录", "注册", "立即阅读", "开始阅读", "更多")
+            if (title in skip) return@mapNotNull null
+            NovelItem(title = title, author = "", coverUrl = "", detailUrl = href, sourceName = name)
         }.distinctBy { it.detailUrl }
     }
 
     private fun parseCatalog(doc: org.jsoup.nodes.Document, fallbackTitle: String): List<NovelVolume> {
         val volumes = mutableListOf<NovelVolume>()
 
-        // Try structured volume/chapter layout
         val chapterLists = doc.select(".chapter-list, .volume-list, ol.chapter-bar-list")
         if (chapterLists.isNotEmpty()) {
             chapterLists.forEach { volEl ->
@@ -170,7 +172,7 @@ class LinovelibSource(
                     ?: "未知卷"
                 val chapters = volEl.select("li a, a.chapter-li-a").mapNotNull { a ->
                     val href = a.attr("href")
-                    if (href.isBlank()) return@mapNotNull null
+                    if (href.isBlank() || href.startsWith("javascript")) return@mapNotNull null
                     NovelChapter(name = a.text().trim(), url = absUrl(href))
                 }
                 if (chapters.isNotEmpty()) {
@@ -179,12 +181,11 @@ class LinovelibSource(
             }
         }
 
-        // Fallback: all links that look like chapter URLs
+        // Fallback
         if (volumes.isEmpty()) {
             val allChapters = doc.select("a[href]").mapNotNull { a ->
                 val href = a.attr("href")
-                if (!href.contains("/novel/") || href.endsWith("/catalog") || href.endsWith(".html").not()) return@mapNotNull null
-                // Chapters have a deeper path than detail pages
+                if (!href.contains("/novel/") || href.endsWith("/catalog") || !href.endsWith(".html")) return@mapNotNull null
                 val path = href.substringAfter("/novel/")
                 if (!path.contains("/")) return@mapNotNull null
                 val text = a.text().trim()
@@ -212,6 +213,6 @@ class LinovelibSource(
         if (url.startsWith("http")) return url
         if (url.startsWith("//")) return "https:$url"
         if (url.startsWith("/")) return "$baseUrl$url"
-        return "${baseUrl}/$url"
+        return "$baseUrl/$url"
     }
 }

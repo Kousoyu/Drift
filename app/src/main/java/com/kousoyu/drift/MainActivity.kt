@@ -73,7 +73,6 @@ class MainActivity : ComponentActivity() {
 
         // ── Initialize source managers with app context ──
         SourceManager.init(this)
-        com.kousoyu.drift.data.NovelSourceManager.init(this)
 
         // ── Initialize auth cache (instant profile restore) ──
         com.kousoyu.drift.data.AuthManager.initialize(applicationContext)
