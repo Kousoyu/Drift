@@ -32,7 +32,12 @@ import kotlinx.coroutines.withContext
 
 /**
  * Novel Detail Screen — shows cover, info, and volume/chapter list.
+ * Detail data is cached in memory → returning from chapter reader is instant.
  */
+
+// Memory cache: detailUrl → NovelDetail (survives navigation)
+private val detailCache = mutableMapOf<String, NovelDetail>()
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NovelDetailScreen(
@@ -45,13 +50,18 @@ fun NovelDetailScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
 
-    // Load detail
+    // Load detail — uses cache if available (instant when returning from reader)
     LaunchedEffect(detailUrl) {
-        loading = true
-        error = null
         val url = java.net.URLDecoder.decode(detailUrl, "UTF-8")
+
+        // Cache hit → instant display
+        detailCache[url]?.let {
+            detail = it; loading = false; return@LaunchedEffect
+        }
+
+        loading = true; error = null
         source.getNovelDetail(url)
-            .onSuccess { detail = it; loading = false }
+            .onSuccess { detail = it; detailCache[url] = it; loading = false }
             .onFailure { error = it.message; loading = false }
     }
 

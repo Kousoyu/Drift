@@ -145,8 +145,13 @@ class LinovelibSource(
 
         // Join with proper paragraph spacing, clean up junk
         parts.joinToString("\n\n")
-            .replace(Regex("如需繼續閱讀.*?bilinovel\\.com[】]?"), "")
-            .replace(Regex("【如需.*?瀏覽器[】]?.*"), "")
+            .replace(Regex("【如需繼續閱讀[^】]*】?"), "")
+            .replace(Regex("如需繼續閱讀.*"), "")
+            .replace(Regex("【?如需继续阅读[^】]*】?"), "")
+            .replace(Regex("\\[Chrome瀏覽器\\].*"), "")
+            .replace(Regex("www\\.bilino?vel\\.com"), "")
+            .replace(Regex("【\\s*$"), "")   // lone bracket at end
+            .replace(Regex("】\\s*$"), "")   // lone bracket at end
             .replace(Regex("\n{3,}"), "\n\n")
             .trim()
     }
