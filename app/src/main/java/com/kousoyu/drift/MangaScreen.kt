@@ -342,8 +342,8 @@ fun MangaScreen(
                         item { BookshelfSection(onExploreClick = onNavigateToExplore) }
                     } else {
                         item {
-                            RealHorizontalList(
-                                items = favorites.map { it.toDomainManga() },
+                            BookshelfRow(
+                                entities = favorites,
                                 onNavigateToDetail = { url, src -> onNavigateToDetail(url, src) }
                             )
                         }
@@ -895,6 +895,110 @@ fun RealHorizontalList(
                     text = manga.latestChapter.ifEmpty { manga.sourceName },
                     fontSize = 10.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+// ─── Bookshelf Row with progress + new-chapter badge ─────────────────────────
+
+@Composable
+fun BookshelfRow(
+    entities: List<com.kousoyu.drift.data.local.MangaEntity>,
+    onNavigateToDetail: (String, String) -> Unit
+) {
+    val context = LocalContext.current
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 20.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp)
+    ) {
+        items(entities, key = { "${it.sourceName}_${it.detailUrl}" }) { entity ->
+            val hasNewChapter = entity.lastReadChapterName != null &&
+                entity.latestChapter.isNotEmpty() &&
+                entity.lastReadChapterName != entity.latestChapter
+
+            Column(
+                modifier = Modifier
+                    .width(100.dp)
+                    .clickable { onNavigateToDetail(entity.detailUrl, entity.sourceName) }
+            ) {
+                Box(
+                    modifier = Modifier
+                        .width(100.dp)
+                        .height(133.dp)
+                        .clip(RoundedCornerShape(8.dp))
+                ) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(context)
+                            .data(entity.coverUrl)
+                            .crossfade(300)
+                            .apply {
+                                val headers = SourceManager.getSourceByName(entity.sourceName).getHeaders()
+                                headers.forEach { (k, v) -> addHeader(k, v) }
+                            }
+                            .build(),
+                        contentDescription = entity.title,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    // "更新" badge when there's an unread chapter
+                    if (hasNewChapter) {
+                        Surface(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(4.dp),
+                            shape = RoundedCornerShape(4.dp),
+                            color = MaterialTheme.colorScheme.primary
+                        ) {
+                            Text(
+                                text = "更新",
+                                color = Color.White,
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+
+                    // Source badge
+                    if (entity.sourceName.isNotEmpty() && entity.sourceName != "Drift") {
+                        Surface(
+                            modifier = Modifier
+                                .align(Alignment.TopStart)
+                                .padding(4.dp),
+                            shape = RoundedCornerShape(4.dp),
+                            color = Color.Black.copy(alpha = 0.55f)
+                        ) {
+                            Text(
+                                text = entity.sourceName.take(2),
+                                color = Color.White,
+                                fontSize = 8.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(horizontal = 4.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+                Spacer(modifier = Modifier.height(6.dp))
+                Text(
+                    text = entity.title,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = entity.lastReadChapterName
+                        ?.let { "读到: ${it.take(12)}" }
+                        ?: entity.latestChapter.ifEmpty { entity.sourceName },
+                    fontSize = 10.sp,
+                    color = if (hasNewChapter) MaterialTheme.colorScheme.primary.copy(alpha = 0.8f)
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )

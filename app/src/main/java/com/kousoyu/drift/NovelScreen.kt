@@ -46,6 +46,7 @@ import java.util.Calendar
 
 // ─── Novel Screen ────────────────────────────────────────────────────────────
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NovelScreen(
     onNavigateToDetail: (String) -> Unit = {},
@@ -63,7 +64,22 @@ fun NovelScreen(
         derivedStateOf { listState.firstVisibleItemIndex > 3 }
     }
 
+    var isPullRefreshing by remember { mutableStateOf(false) }
+
+    // Reset refreshing when data arrives
+    LaunchedEffect(uiState) {
+        if (uiState !is NovelViewModel.UiState.Loading) isPullRefreshing = false
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
+        androidx.compose.material3.pulltorefresh.PullToRefreshBox(
+            isRefreshing = isPullRefreshing,
+            onRefresh = {
+                isPullRefreshing = true
+                novelViewModel.refresh()
+            },
+            modifier = Modifier.fillMaxSize()
+        ) {
         LazyColumn(
             state = listState,
             modifier = Modifier
@@ -271,6 +287,7 @@ fun NovelScreen(
                 Spacer(modifier = Modifier.height(16.dp))
             }
         }
+        } // PullToRefreshBox
 
         // ── Scroll to Top ──
         AnimatedVisibility(
