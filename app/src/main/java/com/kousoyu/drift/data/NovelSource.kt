@@ -30,6 +30,7 @@ data class NovelChapter(
  */
 data class NovelVolume(
     val name: String,
+    val coverUrl: String = "",
     val chapters: List<NovelChapter>
 )
 

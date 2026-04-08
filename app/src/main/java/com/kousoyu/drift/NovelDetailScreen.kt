@@ -295,12 +295,37 @@ fun NovelDetailScreen(
                     val volumes = if (isReversed) d.volumes.reversed() else d.volumes
                     volumes.forEach { volume ->
                         item(key = "vol_${volume.name}_$isReversed") {
-                            Text(
-                                text = volume.name,
-                                fontSize = 15.sp,
-                                fontWeight = FontWeight.Bold,
-                                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
-                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 20.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                // Volume cover thumbnail
+                                if (volume.coverUrl.isNotEmpty()) {
+                                    AsyncImage(
+                                        model = ImageRequest.Builder(LocalContext.current)
+                                            .data(volume.coverUrl)
+                                            .crossfade(true)
+                                            .build(),
+                                        contentDescription = volume.name,
+                                        modifier = Modifier
+                                            .width(40.dp)
+                                            .height(56.dp)
+                                            .clip(RoundedCornerShape(6.dp)),
+                                        contentScale = ContentScale.Crop
+                                    )
+                                }
+                                Text(
+                                    text = volume.name,
+                                    fontSize = 15.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    modifier = Modifier.weight(1f),
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
 
                         val chapters = if (isReversed) volume.chapters.reversed() else volume.chapters

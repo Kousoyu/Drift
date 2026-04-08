@@ -81,10 +81,13 @@ class LinovelibSource(
 
         val title  = sel(doc, "h1", "h2.book-title", ".book-title") ?: "未知标题"
         val author = sel(doc, ".book-rand-a a", ".author a") ?: ""
-        val cover  = selAttr(doc, "src", ".book-img img", ".book-cover img")
+        val cover  = selAttr(doc, "data-original", ".book-img img", ".book-cover img")
             ?: selAttr(doc, "data-src", ".book-img img", ".book-cover img")
+            ?: selAttr(doc, "src", ".book-img img", ".book-cover img")
             ?: selAttr(doc, "content", "meta[property=og:image]") ?: ""
-        val desc   = sel(doc, ".book-dec p", ".book-info-detail .book-dec") ?: ""
+        // Description: collect ALL <p> from .book-dec
+        val desc = doc.select(".book-dec p").joinToString("\n") { it.text().trim() }
+            .trim().ifEmpty { sel(doc, ".book-dec", ".book-info-detail .book-dec") ?: "" }
         val status = sel(doc, ".book-label span", "span.state") ?: ""
 
         val novelId = detailUrl.substringAfterLast("/novel/").substringBefore(".html")
@@ -224,28 +227,36 @@ class LinovelibSource(
     private fun parseCatalog(doc: org.jsoup.nodes.Document, fallbackTitle: String): List<NovelVolume> {
         val volumes = mutableListOf<NovelVolume>()
 
-        val chapterLists = doc.select(".chapter-list, .volume-list, ol.chapter-bar-list")
-        if (chapterLists.isNotEmpty()) {
-            chapterLists.forEach { volEl ->
-                val volName = volEl.previousElementSibling()?.text()?.trim()
-                    ?: volEl.attr("data-volume-name").ifEmpty { null }
-                    ?: "未知卷"
-                val chapters = volEl.select("li a, a.chapter-li-a").mapNotNull { a ->
+        // Primary: div.volume.clearfix (bilinovel structure)
+        val volumeDivs = doc.select("div.volume")
+        if (volumeDivs.isNotEmpty()) {
+            for (volDiv in volumeDivs) {
+                // Volume name from h2.v-line
+                val volName = volDiv.selectFirst("h2 a, h2")?.text()?.trim() ?: "未知卷"
+                // Volume cover from img[data-original]
+                val volCover = volDiv.selectFirst("img[data-original]")?.attr("data-original")
+                    ?: volDiv.selectFirst("img[data-src]")?.attr("data-src")
+                    ?: ""
+                // Chapters: li a
+                val chapters = volDiv.select("ul li a").mapNotNull { a ->
                     val href = a.attr("href")
-                    if (href.isBlank() || href.startsWith("javascript")) return@mapNotNull null
-                    NovelChapter(name = a.text().trim(), url = absUrl(href))
+                    if (href.isBlank() || href.startsWith("javascript") || href.contains("vol_")) return@mapNotNull null
+                    val text = a.text().trim()
+                    if (text.isBlank()) return@mapNotNull null
+                    NovelChapter(name = text, url = absUrl(href))
                 }
                 if (chapters.isNotEmpty()) {
-                    volumes.add(NovelVolume(name = volName, chapters = chapters))
+                    volumes.add(NovelVolume(name = volName, coverUrl = absUrl(volCover), chapters = chapters))
                 }
             }
         }
 
+        // Fallback: flat chapter list
         if (volumes.isEmpty()) {
             val allChapters = doc.select("a[href]").mapNotNull { a ->
                 val href = a.attr("href")
                 if (!href.contains("/novel/") || href.endsWith("/catalog") || !href.endsWith(".html")) return@mapNotNull null
-                if (href.startsWith("javascript")) return@mapNotNull null
+                if (href.startsWith("javascript") || href.contains("vol_")) return@mapNotNull null
                 val path = href.substringAfter("/novel/")
                 if (!path.contains("/")) return@mapNotNull null
                 val text = a.text().trim()
