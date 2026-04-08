@@ -85,9 +85,11 @@ class LinovelibSource(
             ?: selAttr(doc, "data-src", ".book-img img", ".book-cover img")
             ?: selAttr(doc, "src", ".book-img img", ".book-cover img")
             ?: selAttr(doc, "content", "meta[property=og:image]") ?: ""
-        // Description: collect ALL <p> from .book-dec
+        // Description: desktop .book-dec p → mobile .book-summary content
         val desc = doc.select(".book-dec p").joinToString("\n") { it.text().trim() }
-            .trim().ifEmpty { sel(doc, ".book-dec", ".book-info-detail .book-dec") ?: "" }
+            .trim()
+            .ifEmpty { doc.selectFirst(".book-summary content")?.text()?.trim() ?: "" }
+            .ifEmpty { sel(doc, ".book-dec", ".book-summary") ?: "" }
         val status = sel(doc, ".book-label span", "span.state") ?: ""
 
         val novelId = detailUrl.substringAfterLast("/novel/").substringBefore(".html")
@@ -227,43 +229,59 @@ class LinovelibSource(
     private fun parseCatalog(doc: org.jsoup.nodes.Document, fallbackTitle: String): List<NovelVolume> {
         val volumes = mutableListOf<NovelVolume>()
 
-        // Primary: div.volume (bilinovel structure)
-        // Structure: <div class="volume">..header..</div> <ul class="chapter-list">..chapters..</ul>
-        // The <ul> is a SIBLING of div.volume, not a child!
+        // ── Strategy 1: Desktop — div.volume (sibling <ul>) ──
         val volumeDivs = doc.select("div.volume")
         if (volumeDivs.isNotEmpty()) {
             for (volDiv in volumeDivs) {
                 val volName = volDiv.selectFirst("h2 a, h2")?.text()?.trim() ?: "未知卷"
                 val volCover = volDiv.selectFirst("img[data-original]")?.attr("data-original")
-                    ?: volDiv.selectFirst("img[data-src]")?.attr("data-src")
-                    ?: ""
-
-                // The chapter <ul> is a SIBLING after this div.volume
-                // Skip any ad divs (div.index-gox etc.), stop at next div.volume
+                    ?: volDiv.selectFirst("img[data-src]")?.attr("data-src") ?: ""
                 var sibling = volDiv.nextElementSibling()
                 val chapters = mutableListOf<NovelChapter>()
                 while (sibling != null) {
-                    if (sibling.hasClass("volume")) break // next volume
+                    if (sibling.hasClass("volume")) break
                     if (sibling.tagName() == "ul") {
                         sibling.select("li a").forEach { a ->
                             val href = a.attr("href")
                             if (href.isNotBlank() && !href.startsWith("javascript") && !href.contains("vol_")) {
                                 val text = a.text().trim()
-                                if (text.isNotBlank()) {
-                                    chapters.add(NovelChapter(name = text, url = absUrl(href)))
-                                }
+                                if (text.isNotBlank()) chapters.add(NovelChapter(name = text, url = absUrl(href)))
                             }
                         }
                     }
                     sibling = sibling.nextElementSibling()
                 }
-                if (chapters.isNotEmpty()) {
-                    volumes.add(NovelVolume(name = volName, coverUrl = absUrl(volCover), chapters = chapters))
+                if (chapters.isNotEmpty()) volumes.add(NovelVolume(name = volName, coverUrl = absUrl(volCover), chapters = chapters))
+            }
+        }
+
+        // ── Strategy 2: Mobile — li.chapter-bar as volume headers ──
+        if (volumes.isEmpty()) {
+            val chapterBars = doc.select("li.chapter-bar")
+            if (chapterBars.isNotEmpty()) {
+                for (bar in chapterBars) {
+                    val volName = bar.selectFirst("h3, h2, a")?.text()?.trim() ?: "未知卷"
+                    // Collect all following li.jsChapter siblings until next chapter-bar
+                    val chapters = mutableListOf<NovelChapter>()
+                    var sibling = bar.nextElementSibling()
+                    while (sibling != null && !sibling.hasClass("chapter-bar")) {
+                        val a = sibling.selectFirst("a")
+                        if (a != null) {
+                            val href = a.attr("href")
+                            if (href.isNotBlank() && !href.startsWith("javascript") && !href.contains("vol_")) {
+                                val text = a.selectFirst("span.chapter-index")?.text()?.trim()
+                                    ?: a.text().trim()
+                                if (text.isNotBlank()) chapters.add(NovelChapter(name = text, url = absUrl(href)))
+                            }
+                        }
+                        sibling = sibling.nextElementSibling()
+                    }
+                    if (chapters.isNotEmpty()) volumes.add(NovelVolume(name = volName, chapters = chapters))
                 }
             }
         }
 
-        // Fallback: flat chapter list
+        // ── Fallback: flat chapter list ──
         if (volumes.isEmpty()) {
             val allChapters = doc.select("a[href]").mapNotNull { a ->
                 val href = a.attr("href")

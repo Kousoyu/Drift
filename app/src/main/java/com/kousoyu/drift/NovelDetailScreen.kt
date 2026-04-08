@@ -50,11 +50,16 @@ fun NovelDetailScreen(
     var loading by remember { mutableStateOf(true) }
     var isReversed by remember { mutableStateOf(sortOrderCache[detailUrl] ?: false) }
 
-    // Load detail — uses cache if available
+    // Load detail — uses cache if available (invalidate stale entries)
     LaunchedEffect(detailUrl) {
         val url = java.net.URLDecoder.decode(detailUrl, "UTF-8")
-        detailCache[url]?.let {
-            detail = it; loading = false; return@LaunchedEffect
+        detailCache[url]?.let { cached ->
+            // Invalidate if old cache has no description or un-split volumes
+            if (cached.description.isNotEmpty() && cached.volumes.size > 1) {
+                detail = cached; loading = false; return@LaunchedEffect
+            } else {
+                detailCache.remove(url) // stale, re-fetch
+            }
         }
         loading = true; error = null
         source.getNovelDetail(url)
