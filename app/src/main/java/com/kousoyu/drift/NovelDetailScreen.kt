@@ -34,6 +34,9 @@ import com.kousoyu.drift.data.*
 // Memory cache: detailUrl → NovelDetail (survives navigation)
 private val detailCache = mutableMapOf<String, NovelDetail>()
 
+// Sort order persisted per novel (survives navigation to reader and back)
+private val sortOrderCache = mutableMapOf<String, Boolean>()
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun NovelDetailScreen(
@@ -45,7 +48,7 @@ fun NovelDetailScreen(
     var detail by remember { mutableStateOf<NovelDetail?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
-    var isReversed by remember { mutableStateOf(false) }
+    var isReversed by remember { mutableStateOf(sortOrderCache[detailUrl] ?: false) }
 
     // Load detail — uses cache if available
     LaunchedEffect(detailUrl) {
@@ -268,7 +271,7 @@ fun NovelDetailScreen(
                                 fontWeight = FontWeight.Bold
                             )
                             TextButton(
-                                onClick = { isReversed = !isReversed }
+                                onClick = { isReversed = !isReversed; sortOrderCache[detailUrl] = isReversed }
                             ) {
                                 Icon(
                                     Icons.Default.SwapVert,

@@ -104,9 +104,6 @@ class LinovelibSource(
     override suspend fun getChapterContent(chapterUrl: String): Result<String> = runCatching {
         val parts = mutableListOf<String>()
         var currentUrl = chapterUrl
-        // Normalize: extract just the last path segment's numeric base
-        // e.g. "https://...bilinovel.com/novel/75/11067.html" → "11067"
-        // e.g. "/novel/75/11067_3.html" → "11067"
         fun extractBase(url: String): String =
             url.substringAfterLast("/").substringBefore(".html").substringBefore("_")
 
@@ -114,7 +111,16 @@ class LinovelibSource(
         val maxPages = 30
 
         for (i in 0 until maxPages) {
-            val html = fetch(currentUrl)
+            // Small delay between pages to avoid rate limiting (error 1015)
+            if (i > 0) kotlinx.coroutines.delay(200)
+
+            val html = try {
+                fetch(currentUrl)
+            } catch (e: Exception) {
+                // If a sub-page fails, keep what we have rather than losing everything
+                if (parts.isNotEmpty()) break else throw e
+            }
+
             val doc = Jsoup.parse(html, baseUrl)
 
             val content = doc.selectFirst("#acontent, #TextContent, .read-content, .chapter-content")
@@ -128,7 +134,7 @@ class LinovelibSource(
                     val text = node.text().trim()
                     if (text.isNotEmpty()) paragraphs.add(text)
                 }
-                // Fallback: if content has no child elements, use br as separator
+                // Fallback: br-separated
                 if (paragraphs.isEmpty()) {
                     content.select("br").append("|||BR|||")
                     paragraphs.addAll(
@@ -136,7 +142,7 @@ class LinovelibSource(
                             .map { it.trim() }.filter { it.isNotEmpty() }
                     )
                 }
-                // Fallback: raw text if still empty
+                // Fallback: raw text
                 if (paragraphs.isEmpty()) {
                     val raw = content.text().trim()
                     if (raw.isNotEmpty()) paragraphs.add(raw)

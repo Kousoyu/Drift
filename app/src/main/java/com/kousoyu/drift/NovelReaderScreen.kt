@@ -1,8 +1,12 @@
 package com.kousoyu.drift
 
 import androidx.compose.animation.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
@@ -12,6 +16,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -21,10 +27,8 @@ import com.kousoyu.drift.data.NovelChapter
 import com.kousoyu.drift.data.NovelSourceManager
 
 /**
- * Novel Reader Screen — clean text reading experience with prev/next chapter.
- *
- * Design: minimal UI, comfortable reading, seamless chapter navigation.
- * The chapter list is passed in so we can navigate between chapters.
+ * Novel Reader Screen — tap-to-toggle UI, like the manga reader.
+ * Chapter content is cached so prev/next is instant on revisit.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -39,6 +43,7 @@ fun NovelReaderScreen(
     var content by remember { mutableStateOf<String?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
+    var showMenu by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
 
     val decodedUrl = remember(chapterUrl) { java.net.URLDecoder.decode(chapterUrl, "UTF-8") }
@@ -51,12 +56,23 @@ fun NovelReaderScreen(
     val hasPrev = currentIndex > 0
     val hasNext = currentIndex in 0 until allChapters.size - 1
 
-    // Load chapter content
+    // Load chapter content — uses cache if available
     LaunchedEffect(chapterUrl) {
         loading = true; error = null; content = null
         scrollState.scrollTo(0)
+        showMenu = false
+
+        // Cache hit → instant
+        NovelContentCache.get(decodedUrl)?.let {
+            content = it; loading = false
+            return@LaunchedEffect
+        }
+
         source.getChapterContent(decodedUrl)
-            .onSuccess { content = it; loading = false }
+            .onSuccess {
+                content = it; loading = false
+                NovelContentCache.put(decodedUrl, it)
+            }
             .onFailure { error = it.message; loading = false }
     }
 
@@ -65,95 +81,12 @@ fun NovelReaderScreen(
         NovelReadingProgress.save(decodedUrl, decodedName)
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = decodedName,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontSize = 14.sp
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.95f)
-                )
-            )
-        },
-        // Bottom bar: prev/next chapter
-        bottomBar = {
-            if (allChapters.size > 1 && onNavigateChapter != null) {
-                Surface(
-                    tonalElevation = 2.dp,
-                    shadowElevation = 4.dp
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .navigationBarsPadding()
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        TextButton(
-                            onClick = {
-                                if (hasPrev) {
-                                    val prev = allChapters[currentIndex - 1]
-                                    onNavigateChapter(prev.url, prev.name)
-                                }
-                            },
-                            enabled = hasPrev
-                        ) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowLeft,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                            Spacer(Modifier.width(4.dp))
-                            Text("上一章", fontSize = 13.sp)
-                        }
-
-                        // Chapter position indicator
-                        if (currentIndex >= 0) {
-                            Text(
-                                text = "${currentIndex + 1} / ${allChapters.size}",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                            )
-                        }
-
-                        TextButton(
-                            onClick = {
-                                if (hasNext) {
-                                    val next = allChapters[currentIndex + 1]
-                                    onNavigateChapter(next.url, next.name)
-                                }
-                            },
-                            enabled = hasNext
-                        ) {
-                            Text("下一章", fontSize = 13.sp)
-                            Spacer(Modifier.width(4.dp))
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowRight,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    ) { padding ->
+    Box(modifier = Modifier.fillMaxSize()) {
+        // ── Main content area (tappable to toggle menu) ──
         when {
             loading -> {
                 Box(
-                    modifier = Modifier.fillMaxSize().padding(padding),
+                    modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -170,7 +103,7 @@ fun NovelReaderScreen(
 
             error != null -> {
                 Box(
-                    modifier = Modifier.fillMaxSize().padding(padding),
+                    modifier = Modifier.fillMaxSize(),
                     contentAlignment = Alignment.Center
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -190,10 +123,23 @@ fun NovelReaderScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
-                        .padding(padding)
                         .verticalScroll(scrollState)
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() }
+                        ) { showMenu = !showMenu }
                         .padding(horizontal = 24.dp, vertical = 16.dp)
+                        .statusBarsPadding()
                 ) {
+                    // Chapter title
+                    Text(
+                        text = decodedName,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        modifier = Modifier.padding(bottom = 20.dp)
+                    )
+
                     Text(
                         text = content!!,
                         fontSize = 16.sp,
@@ -201,7 +147,99 @@ fun NovelReaderScreen(
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
                         letterSpacing = 0.3.sp
                     )
-                    Spacer(Modifier.height(60.dp))
+                    Spacer(Modifier.height(80.dp))
+                }
+            }
+        }
+
+        // ── Top overlay: title + back (tap to show) ──
+        AnimatedVisibility(
+            visible = showMenu,
+            enter = fadeIn() + slideInVertically(initialOffsetY = { -it }),
+            exit = fadeOut() + slideOutVertically(targetOffsetY = { -it }),
+            modifier = Modifier.align(Alignment.TopCenter)
+        ) {
+            Surface(
+                tonalElevation = 3.dp,
+                shadowElevation = 4.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .statusBarsPadding()
+                        .height(56.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
+                    }
+                    Text(
+                        text = decodedName,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        fontSize = 14.sp,
+                        modifier = Modifier.weight(1f).padding(end = 16.dp)
+                    )
+                }
+            }
+        }
+
+        // ── Bottom overlay: prev/next chapter (tap to show) ──
+        AnimatedVisibility(
+            visible = showMenu && allChapters.size > 1 && onNavigateChapter != null,
+            enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
+            exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
+            modifier = Modifier.align(Alignment.BottomCenter)
+        ) {
+            Surface(
+                tonalElevation = 3.dp,
+                shadowElevation = 4.dp,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .navigationBarsPadding()
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    TextButton(
+                        onClick = {
+                            if (hasPrev && onNavigateChapter != null) {
+                                val prev = allChapters[currentIndex - 1]
+                                onNavigateChapter(prev.url, prev.name)
+                            }
+                        },
+                        enabled = hasPrev
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowLeft, null, Modifier.size(18.dp))
+                        Spacer(Modifier.width(4.dp))
+                        Text("上一章", fontSize = 13.sp)
+                    }
+
+                    if (currentIndex >= 0) {
+                        Text(
+                            text = "${currentIndex + 1} / ${allChapters.size}",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        )
+                    }
+
+                    TextButton(
+                        onClick = {
+                            if (hasNext && onNavigateChapter != null) {
+                                val next = allChapters[currentIndex + 1]
+                                onNavigateChapter(next.url, next.name)
+                            }
+                        },
+                        enabled = hasNext
+                    ) {
+                        Text("下一章", fontSize = 13.sp)
+                        Spacer(Modifier.width(4.dp))
+                        Icon(Icons.AutoMirrored.Filled.ArrowRight, null, Modifier.size(18.dp))
+                    }
                 }
             }
         }
@@ -209,15 +247,31 @@ fun NovelReaderScreen(
 }
 
 /**
+ * Chapter content cache — avoids re-fetching when navigating prev/next.
+ * LRU-like: keeps last 10 chapters in memory.
+ */
+object NovelContentCache {
+    private const val MAX = 10
+    private val cache = LinkedHashMap<String, String>(MAX + 2, 0.75f, true)
+
+    fun get(url: String): String? = cache[url]
+
+    fun put(url: String, content: String) {
+        cache[url] = content
+        while (cache.size > MAX) {
+            cache.remove(cache.keys.first())
+        }
+    }
+}
+
+/**
  * Simple in-memory reading progress tracker.
- * Stores the last-read chapter URL and name per novel detail URL.
+ * Stores the last-read chapter URL and name per novel.
  */
 object NovelReadingProgress {
-    // detailUrl → (chapterUrl, chapterName)
     private val progress = mutableMapOf<String, Pair<String, String>>()
 
     fun save(chapterUrl: String, chapterName: String) {
-        // Use the novel path as key: /novel/75/xxxx.html → /novel/75
         val novelKey = extractNovelKey(chapterUrl)
         if (novelKey.isNotEmpty()) {
             progress[novelKey] = chapterUrl to chapterName
@@ -230,9 +284,7 @@ object NovelReadingProgress {
     }
 
     private fun extractNovelKey(url: String): String {
-        // "/novel/75/xxxx.html" → "/novel/75"
-        // "https://www.bilinovel.com/novel/75/xxxx.html" → "/novel/75"
-        val path = url.substringAfter(".com", url) // remove domain if present
+        val path = url.substringAfter(".com", url)
         val parts = path.split("/")
         val novelIdx = parts.indexOf("novel")
         return if (novelIdx >= 0 && novelIdx + 1 < parts.size) {
