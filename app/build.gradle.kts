@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
@@ -20,10 +22,13 @@ android {
 
     signingConfigs {
         create("release") {
+            val localProps = rootProject.file("local.properties")
+            val props = Properties()
+            if (localProps.exists()) props.load(localProps.inputStream())
             storeFile = file("../drift-release.keystore")
-            storePassword = "drift2026"
-            keyAlias = "drift"
-            keyPassword = "drift2026"
+            storePassword = props.getProperty("RELEASE_STORE_PASSWORD", "")
+            keyAlias = props.getProperty("RELEASE_KEY_ALIAS", "")
+            keyPassword = props.getProperty("RELEASE_KEY_PASSWORD", "")
         }
     }
 

@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowLeft
 import androidx.compose.material.icons.automirrored.filled.ArrowRight
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -51,6 +52,9 @@ fun NovelReaderScreen(
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var showMenu by remember { mutableStateOf(false) }
+    var showSettings by remember { mutableStateOf(false) }
+    var fontSize by remember { mutableFloatStateOf(ReaderSettings.fontSize) }
+    var lineHeight by remember { mutableFloatStateOf(ReaderSettings.lineHeight) }
     val scrollState = rememberScrollState()
     val coroutineScope = rememberCoroutineScope()
 
@@ -201,8 +205,8 @@ fun NovelReaderScreen(
 
                     Text(
                         text = indentedContent,
-                        fontSize = 16.sp,
-                        lineHeight = 28.sp,
+                        fontSize = fontSize.sp,
+                        lineHeight = lineHeight.sp,
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
                         letterSpacing = 0.3.sp
                     )
@@ -244,9 +248,9 @@ fun NovelReaderScreen(
             }
         }
 
-        // ── Bottom overlay: prev/next chapter (tap to show) ──
+        // ── Bottom overlay: controls (tap to show) ──
         AnimatedVisibility(
-            visible = showMenu && allChapters.size > 1 && onNavigateChapter != null,
+            visible = showMenu,
             enter = fadeIn() + slideInVertically(initialOffsetY = { it }),
             exit = fadeOut() + slideOutVertically(targetOffsetY = { it }),
             modifier = Modifier.align(Alignment.BottomCenter)
@@ -256,48 +260,107 @@ fun NovelReaderScreen(
                 shadowElevation = 4.dp,
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .navigationBarsPadding()
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                        .padding(horizontal = 12.dp, vertical = 8.dp)
                 ) {
-                    TextButton(
-                        onClick = {
-                            if (hasPrev && onNavigateChapter != null) {
-                                val prev = allChapters[currentIndex - 1]
-                                onNavigateChapter(prev.url, prev.name)
+                    // ── Reading Settings ──
+                    AnimatedVisibility(visible = showSettings) {
+                        Column(modifier = Modifier.padding(bottom = 8.dp)) {
+                            // Font size
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("字号", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.width(36.dp))
+                                TextButton(onClick = {
+                                    if (fontSize > 12f) { fontSize -= 1f; ReaderSettings.fontSize = fontSize }
+                                }) { Text("A-", fontSize = 13.sp) }
+                                Text("${fontSize.toInt()}sp", fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.width(40.dp),
+                                    textAlign = TextAlign.Center)
+                                TextButton(onClick = {
+                                    if (fontSize < 28f) { fontSize += 1f; ReaderSettings.fontSize = fontSize }
+                                }) { Text("A+", fontSize = 13.sp) }
                             }
-                        },
-                        enabled = hasPrev
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowLeft, null, Modifier.size(18.dp))
-                        Spacer(Modifier.width(4.dp))
-                        Text("上一章", fontSize = 13.sp)
+                            // Line height
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("行距", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.width(36.dp))
+                                TextButton(onClick = {
+                                    if (lineHeight > 20f) { lineHeight -= 2f; ReaderSettings.lineHeight = lineHeight }
+                                }) { Text("－", fontSize = 13.sp) }
+                                Text("${lineHeight.toInt()}sp", fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.width(40.dp),
+                                    textAlign = TextAlign.Center)
+                                TextButton(onClick = {
+                                    if (lineHeight < 48f) { lineHeight += 2f; ReaderSettings.lineHeight = lineHeight }
+                                }) { Text("＋", fontSize = 13.sp) }
+                            }
+                            HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
+                        }
                     }
 
-                    if (currentIndex >= 0) {
-                        Text(
-                            text = "${currentIndex + 1} / ${allChapters.size}",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                        )
-                    }
-
-                    TextButton(
-                        onClick = {
-                            if (hasNext && onNavigateChapter != null) {
-                                val next = allChapters[currentIndex + 1]
-                                onNavigateChapter(next.url, next.name)
-                            }
-                        },
-                        enabled = hasNext
+                    // ── Chapter nav + settings toggle ──
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("下一章", fontSize = 13.sp)
-                        Spacer(Modifier.width(4.dp))
-                        Icon(Icons.AutoMirrored.Filled.ArrowRight, null, Modifier.size(18.dp))
+                        TextButton(
+                            onClick = {
+                                if (hasPrev && onNavigateChapter != null) {
+                                    val prev = allChapters[currentIndex - 1]
+                                    onNavigateChapter(prev.url, prev.name)
+                                }
+                            },
+                            enabled = hasPrev
+                        ) {
+                            Icon(Icons.AutoMirrored.Filled.ArrowLeft, null, Modifier.size(18.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("上一章", fontSize = 13.sp)
+                        }
+
+                        // Settings toggle
+                        IconButton(onClick = { showSettings = !showSettings }) {
+                            Icon(
+                                Icons.Default.Settings,
+                                contentDescription = "阅读设置",
+                                modifier = Modifier.size(20.dp),
+                                tint = if (showSettings) MaterialTheme.colorScheme.primary
+                                       else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+
+                        if (currentIndex >= 0) {
+                            Text(
+                                text = "${currentIndex + 1}/${allChapters.size}",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                            )
+                        }
+
+                        TextButton(
+                            onClick = {
+                                if (hasNext && onNavigateChapter != null) {
+                                    val next = allChapters[currentIndex + 1]
+                                    onNavigateChapter(next.url, next.name)
+                                }
+                            },
+                            enabled = hasNext
+                        ) {
+                            Text("下一章", fontSize = 13.sp)
+                            Spacer(Modifier.width(4.dp))
+                            Icon(Icons.AutoMirrored.Filled.ArrowRight, null, Modifier.size(18.dp))
+                        }
                     }
                 }
             }
@@ -346,4 +409,13 @@ private fun extractNovelBaseUrl(chapterUrl: String): String {
     val regex = Regex("(https?://[^/]+/novel/\\d+)")
     val match = regex.find(chapterUrl)
     return match?.groupValues?.get(1)?.let { "$it.html" } ?: ""
+}
+
+/**
+ * Persistent reading settings — survives navigation, persists across sessions.
+ * Simple static object (no SharedPreferences overhead needed for 2 values).
+ */
+object ReaderSettings {
+    var fontSize: Float = 16f
+    var lineHeight: Float = 28f
 }
