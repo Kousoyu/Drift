@@ -15,12 +15,7 @@ import org.jsoup.Jsoup
  * ✅ Rich library    → 100k+ novels
  * ✅ Instant loading → <0.5s per request
  *
- * URL patterns:
- *   Home:    https://m.bqg70.com/
- *   Detail:  https://m.bqg70.com/book/{id}/
- *   Chapter: https://m.bqg70.com/book/{id}/{num}.html
- *   Search:  https://m.bqg70.com/s?q={query}
- *   List:    https://m.bqg70.com/book/{id}/list.html
+ * Cover: https://www.bq730.cc/bookimg/{folder}/{bookId}.jpg
  */
 class BiqugeSource(
     private val client: OkHttpClient
@@ -32,7 +27,7 @@ class BiqugeSource(
     private val UA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) " +
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
 
-    // ─── HTTP Fetch (fast, no WebView!) ──────────────────────────────────────
+    // ─── HTTP Fetch ─────────────────────────────────────────────────────────
 
     private suspend fun fetch(path: String): String = withContext(Dispatchers.IO) {
         val url = if (path.startsWith("http")) path else "$baseUrl$path"
@@ -56,28 +51,49 @@ class BiqugeSource(
         val doc = Jsoup.parse(html, baseUrl)
 
         val novels = mutableListOf<NovelItem>()
+        val skip = setOf("首页", "排行榜", "全本", "我的书架", "阅读记录", "网站地图",
+            "加入书架", "开始阅读", "更新报错", "查看更多章节>>", "xml")
 
-        // Parse recommendation sections
-        doc.select("a[href*=/book/]").forEach { a ->
+        // Build a cover map from <img> tags on the page
+        val coverMap = mutableMapOf<String, String>()  // bookPath → coverUrl
+        doc.select("img[src*=bookimg]").forEach { img ->
+            val src = img.absUrl("src")
+            val alt = img.attr("alt").trim()
+            // Find the closest <a> link to this image
+            val parent = img.parent()
+            val link = parent?.selectFirst("a[href*=/book/]")
+                ?: parent?.parent()?.selectFirst("a[href*=/book/]")
+            if (link != null) {
+                coverMap[link.attr("href")] = src
+            }
+            // Also map by alt text for fallback matching
+            if (alt.isNotEmpty()) coverMap[alt] = src
+        }
+
+        // Parse all book links
+        doc.select("a[href~=/book/\\d+/\$]").forEach { a ->
             val href = a.absUrl("href")
-            if (!href.matches(Regex(".*bqg70\\.com/book/\\d+/$"))) return@forEach
+            val path = a.attr("href")
             val title = a.text().trim()
-            if (title.length < 2) return@forEach
-            // Skip navigation links
-            val skip = setOf("首页", "排行榜", "全本", "我的书架", "阅读记录", "网站地图",
-                "加入书架", "开始阅读", "更新报错", "查看更多章节>>")
-            if (title in skip) return@forEach
+            if (title.length < 2 || title in skip) return@forEach
+
+            // Find cover from img tags on the page
+            val coverUrl = coverMap[path]
+                ?: coverMap[title]
+                ?: ""
+
+            // Extract author from sibling <span class="s3">
+            val author = a.parent()?.selectFirst(".s3")?.text()?.trim() ?: ""
 
             novels.add(NovelItem(
                 title = title,
-                author = "",
-                coverUrl = "",
+                author = author,
+                coverUrl = coverUrl,
                 detailUrl = href,
                 sourceName = name
             ))
         }
 
-        // Deduplicate
         novels.distinctBy { it.detailUrl }.take(30)
     }
 
@@ -88,14 +104,19 @@ class BiqugeSource(
         val html = fetch("/s?q=$q")
         val doc = Jsoup.parse(html, baseUrl)
 
-        doc.select("a[href*=/book/]").mapNotNull { a ->
+        doc.select("a[href~=/book/\\d+/\$]").mapNotNull { a ->
             val href = a.absUrl("href")
-            if (!href.matches(Regex(".*bqg70\\.com/book/\\d+/$"))) return@mapNotNull null
             val title = a.text().trim()
             if (title.length < 2) return@mapNotNull null
+
+            val coverUrl = a.parent()?.selectFirst("img")?.absUrl("src") ?: ""
+
             NovelItem(
-                title = title, author = "", coverUrl = "",
-                detailUrl = href, sourceName = name
+                title = title,
+                author = "",
+                coverUrl = coverUrl,
+                detailUrl = href,
+                sourceName = name
             )
         }.distinctBy { it.detailUrl }
     }
@@ -111,17 +132,23 @@ class BiqugeSource(
         val desc = doc.selectFirst("meta[name=description], meta[property=og:description]")
             ?.attr("content")?.trim() ?: ""
 
+        // Cover from <img> on detail page
+        val coverUrl = doc.selectFirst("img[src*=bookimg]")?.absUrl("src") ?: ""
+
+        // Author from detail page
+        val author = doc.selectFirst(".bookinfo span, .author")?.text()?.trim() ?: ""
+
         // Get full chapter list
-        val bookId = detailUrl.trimEnd('/').substringAfterLast("/book/").substringBefore("/")
+        val bookId = extractBookId(detailUrl)
         val listHtml = fetch("/book/$bookId/list.html")
         val listDoc = Jsoup.parse(listHtml, baseUrl)
 
         val chapters = listDoc.select("a[href*=/book/$bookId/]").mapNotNull { a ->
             val href = a.absUrl("href")
             if (!href.endsWith(".html")) return@mapNotNull null
-            val name = a.text().trim()
-            if (name.isBlank()) return@mapNotNull null
-            NovelChapter(name = name, url = href)
+            val chName = a.text().trim()
+            if (chName.isBlank()) return@mapNotNull null
+            NovelChapter(name = chName, url = href)
         }.distinctBy { it.url }
 
         val volumes = if (chapters.isNotEmpty()) {
@@ -131,8 +158,8 @@ class BiqugeSource(
         NovelDetail(
             url = detailUrl,
             title = title,
-            author = "",
-            coverUrl = "",
+            author = author,
+            coverUrl = coverUrl,
             description = desc,
             status = "",
             volumes = volumes
@@ -148,7 +175,6 @@ class BiqugeSource(
         val content = doc.selectFirst("#chaptercontent, #content, .chapter-content, .readcontent")
             ?: error("未找到章节内容")
 
-        // Clean ads and formatting
         content.select("script, ins, .adsbygoogle, style, .readinline, p.readinline").remove()
         content.select("br").append("\n")
         content.select("p").prepend("\n")
@@ -165,4 +191,12 @@ class BiqugeSource(
         "User-Agent" to UA,
         "Referer" to "$baseUrl/"
     )
+
+    // ─── Helpers ────────────────────────────────────────────────────────────
+
+    /**
+     * Extract numeric book ID from URL path like /book/2645/ → 2645
+     */
+    private fun extractBookId(url: String): String =
+        url.trimEnd('/').substringAfterLast("/book/").substringBefore("/")
 }
