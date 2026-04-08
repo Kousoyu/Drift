@@ -44,6 +44,7 @@ fun ProfileScreen(
 
     // ── Live data from ProfileViewModel ─────────────────────────────────
     val favoriteCount by profileVm.favoriteCount.collectAsState()
+    val novelFavoriteCount by profileVm.novelFavoriteCount.collectAsState()
     val cacheSize by profileVm.cacheSize.collectAsState()
 
     // 每次页面可见时刷新缓存大小
@@ -112,9 +113,7 @@ fun ProfileScreen(
         ) {
             StatBlock(value = "$favoriteCount", label = "漫画", modifier = Modifier.weight(1f))
             StatDivider()
-            StatBlock(value = "0", label = "小说", modifier = Modifier.weight(1f))
-            StatDivider()
-            StatBlock(value = "0", label = "追番", modifier = Modifier.weight(1f))
+            StatBlock(value = "$novelFavoriteCount", label = "小说", modifier = Modifier.weight(1f))
         }
 
         // ─── Cache Row ───────────────────────────────────────────────────────

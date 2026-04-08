@@ -12,9 +12,13 @@ import java.io.File
 class ProfileViewModel(application: Application) : AndroidViewModel(application) {
 
     private val dao = DriftDatabase.getDatabase(application).mangaDao()
+    private val novelDao = DriftDatabase.getDatabase(application).novelDao()
 
     // ── Real-time favorite count from Room ──────────────────────────────────
     val favoriteCount: StateFlow<Int> = dao.getFavoriteCount()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    val novelFavoriteCount: StateFlow<Int> = novelDao.getFavoriteCount()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
 
     // ── Cache size (formatted string) ───────────────────────────────────────

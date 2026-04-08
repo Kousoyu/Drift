@@ -191,8 +191,16 @@ fun NovelReaderScreen(
                         modifier = Modifier.padding(bottom = 20.dp)
                     )
 
+                    // Apply 首行缩进 (2 full-width spaces per paragraph)
+                    val indentedContent = remember(content) {
+                        content!!.lines().joinToString("\n") { line ->
+                            val trimmed = line.trim()
+                            if (trimmed.isEmpty()) "" else "\u3000\u3000$trimmed"
+                        }
+                    }
+
                     Text(
-                        text = content!!,
+                        text = indentedContent,
                         fontSize = 16.sp,
                         lineHeight = 28.sp,
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.85f),
