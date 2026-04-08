@@ -36,6 +36,14 @@
 # Keep all source implementations
 -keep class com.kousoyu.drift.data.sources.** { *; }
 
+# ─── Novel Data Models ────────────────────────────────────────────────────
+-keep class com.kousoyu.drift.data.NovelItem { *; }
+-keep class com.kousoyu.drift.data.NovelChapter { *; }
+-keep class com.kousoyu.drift.data.NovelVolume { *; }
+-keep class com.kousoyu.drift.data.NovelDetail { *; }
+-keep class com.kousoyu.drift.data.NovelSourceManager { *; }
+-keep class com.kousoyu.drift.data.NovelDetailViewModel { *; }
+
 # Keep UpdateManager and its inner classes
 -keep class com.kousoyu.drift.data.UpdateManager { *; }
 -keep class com.kousoyu.drift.data.UpdateManager$* { *; }
