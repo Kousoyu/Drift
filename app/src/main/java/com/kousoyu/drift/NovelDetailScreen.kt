@@ -1,8 +1,5 @@
 package com.kousoyu.drift
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -10,6 +7,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.SwapVert
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,11 +25,9 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
 import com.kousoyu.drift.data.*
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 
 /**
- * Novel Detail Screen — shows cover, info, and volume/chapter list.
+ * Novel Detail Screen — cover, info, sort toggle, continue reading, volume/chapter list.
  * Detail data is cached in memory → returning from chapter reader is instant.
  */
 
@@ -43,27 +39,35 @@ private val detailCache = mutableMapOf<String, NovelDetail>()
 fun NovelDetailScreen(
     detailUrl: String,
     onBack: () -> Unit,
-    onChapterClick: (chapterUrl: String, chapterName: String) -> Unit
+    onChapterClick: (chapterUrl: String, chapterName: String, allChapters: List<NovelChapter>) -> Unit
 ) {
     val source = NovelSourceManager.currentSource.collectAsState().value
     var detail by remember { mutableStateOf<NovelDetail?>(null) }
     var error by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
+    var isReversed by remember { mutableStateOf(false) }
 
-    // Load detail — uses cache if available (instant when returning from reader)
+    // Load detail — uses cache if available
     LaunchedEffect(detailUrl) {
         val url = java.net.URLDecoder.decode(detailUrl, "UTF-8")
-
-        // Cache hit → instant display
         detailCache[url]?.let {
             detail = it; loading = false; return@LaunchedEffect
         }
-
         loading = true; error = null
         source.getNovelDetail(url)
             .onSuccess { detail = it; detailCache[url] = it; loading = false }
             .onFailure { error = it.message; loading = false }
     }
+
+    // All chapters flattened (for navigation)
+    val allChapters = remember(detail, isReversed) {
+        val flat = detail?.volumes?.flatMap { it.chapters } ?: emptyList()
+        if (isReversed) flat.reversed() else flat
+    }
+
+    // Reading progress
+    val decodedUrl = remember(detailUrl) { java.net.URLDecoder.decode(detailUrl, "UTF-8") }
+    val lastRead = NovelReadingProgress.get(decodedUrl)
 
     Scaffold(
         topBar = {
@@ -137,7 +141,6 @@ fun NovelDetailScreen(
                                 .padding(horizontal = 20.dp, vertical = 12.dp),
                             horizontalArrangement = Arrangement.spacedBy(16.dp)
                         ) {
-                            // Cover
                             if (d.coverUrl.isNotEmpty()) {
                                 AsyncImage(
                                     model = ImageRequest.Builder(LocalContext.current)
@@ -171,7 +174,6 @@ fun NovelDetailScreen(
                                 }
                             }
 
-                            // Info
                             Column(
                                 modifier = Modifier.weight(1f),
                                 verticalArrangement = Arrangement.spacedBy(4.dp)
@@ -233,18 +235,63 @@ fun NovelDetailScreen(
                         }
                     }
 
-                    // ── Divider ──
+                    // ── Continue Reading Button ──
+                    if (lastRead != null) {
+                        item {
+                            Button(
+                                onClick = {
+                                    val flat = d.volumes.flatMap { it.chapters }
+                                    onChapterClick(lastRead.first, lastRead.second, flat)
+                                },
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                                shape = RoundedCornerShape(10.dp)
+                            ) {
+                                Text("继续阅读 · ${lastRead.second}", maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                    }
+
+                    // ── Divider + Sort Toggle ──
                     item {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 20.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "目录",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            TextButton(
+                                onClick = { isReversed = !isReversed }
+                            ) {
+                                Icon(
+                                    Icons.Default.SwapVert,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = if (isReversed) "倒序" else "正序",
+                                    fontSize = 13.sp
+                                )
+                            }
+                        }
                         HorizontalDivider(
-                            modifier = Modifier.padding(horizontal = 20.dp, vertical = 12.dp),
+                            modifier = Modifier.padding(horizontal = 20.dp),
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f)
                         )
                     }
 
                     // ── Volumes & Chapters ──
-                    d.volumes.forEach { volume ->
-                        // Volume header
-                        item(key = "vol_${volume.name}") {
+                    val volumes = if (isReversed) d.volumes.reversed() else d.volumes
+                    volumes.forEach { volume ->
+                        item(key = "vol_${volume.name}_$isReversed") {
                             Text(
                                 text = volume.name,
                                 fontSize = 15.sp,
@@ -253,20 +300,27 @@ fun NovelDetailScreen(
                             )
                         }
 
-                        // Chapters
-                        items(volume.chapters, key = { it.url }) { chapter ->
+                        val chapters = if (isReversed) volume.chapters.reversed() else volume.chapters
+                        items(chapters, key = { "${it.url}_$isReversed" }) { chapter ->
                             Surface(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(horizontal = 20.dp, vertical = 2.dp),
                                 shape = RoundedCornerShape(8.dp),
-                                color = Color.Transparent,
-                                onClick = { onChapterClick(chapter.url, chapter.name) }
+                                color = if (lastRead?.first == chapter.url)
+                                    MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                                else Color.Transparent,
+                                onClick = {
+                                    val flat = d.volumes.flatMap { it.chapters }
+                                    onChapterClick(chapter.url, chapter.name, flat)
+                                }
                             ) {
                                 Text(
                                     text = chapter.name,
                                     fontSize = 14.sp,
-                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
+                                    color = if (lastRead?.first == chapter.url)
+                                        MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
                                     modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis

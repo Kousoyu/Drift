@@ -37,6 +37,11 @@ import com.kousoyu.drift.data.SourceManager
 import com.kousoyu.drift.data.UpdateManager
 import kotlinx.coroutines.launch
 
+// In-memory holder for chapter list (passed between detail → reader)
+object NovelChapterHolder {
+    var chapters: List<com.kousoyu.drift.data.NovelChapter> = emptyList()
+}
+
 // ─── Navigation Routes ────────────────────────────────────────────────────────
 object DriftRoutes {
     const val MAIN         = "main"
@@ -289,7 +294,9 @@ class MainActivity : ComponentActivity() {
                         NovelDetailScreen(
                             detailUrl = url,
                             onBack = { navController.popBackStack() },
-                            onChapterClick = { chapterUrl, chapterName ->
+                            onChapterClick = { chapterUrl, chapterName, allChapters ->
+                                // Store chapter list in memory for the reader
+                                NovelChapterHolder.chapters = allChapters
                                 navController.navigate(DriftRoutes.createNovelReaderRoute(chapterUrl, chapterName))
                             }
                         )
@@ -310,7 +317,14 @@ class MainActivity : ComponentActivity() {
                         NovelReaderScreen(
                             chapterUrl = url,
                             chapterName = chapterName,
-                            onBack = { navController.popBackStack() }
+                            allChapters = NovelChapterHolder.chapters,
+                            onBack = { navController.popBackStack() },
+                            onNavigateChapter = { newUrl, newName ->
+                                // Replace current reader with new chapter
+                                navController.navigate(DriftRoutes.createNovelReaderRoute(newUrl, newName)) {
+                                    popUpTo(DriftRoutes.NOVEL_READER) { inclusive = true }
+                                }
+                            }
                         )
                     }
 
