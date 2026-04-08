@@ -84,9 +84,23 @@ class MainActivity : ComponentActivity() {
         // ── Initialize auth cache (instant profile restore) ──
         com.kousoyu.drift.data.AuthManager.initialize(applicationContext)
 
-        // ── Coil: 256MB disk cache for instant re-reads ──
+        // ── Coil: 256MB disk cache + Referer for image servers ──
+        val coilClient = okhttp3.OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val req = chain.request()
+                val host = req.url.host
+                // readpai.com (bilinovel covers) requires Referer
+                val newReq = if (host.contains("readpai") || host.contains("bilinovel") || host.contains("linovelib")) {
+                    req.newBuilder()
+                        .header("Referer", "https://www.linovelib.com/")
+                        .build()
+                } else req
+                chain.proceed(newReq)
+            }
+            .build()
         Coil.setImageLoader(
             ImageLoader.Builder(this)
+                .okHttpClient(coilClient)
                 .diskCache {
                     DiskCache.Builder()
                         .directory(cacheDir.resolve("image_cache"))
