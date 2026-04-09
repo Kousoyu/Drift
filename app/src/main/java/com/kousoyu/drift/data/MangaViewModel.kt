@@ -14,7 +14,6 @@ import org.json.JSONObject
 import java.io.File
 import com.kousoyu.drift.data.local.DriftDatabase
 import com.kousoyu.drift.data.local.MangaEntity
-import com.kousoyu.drift.data.local.toDomainManga
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.map

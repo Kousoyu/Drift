@@ -37,11 +37,6 @@ import com.kousoyu.drift.data.SourceManager
 import com.kousoyu.drift.data.UpdateManager
 import kotlinx.coroutines.launch
 
-// In-memory holder for chapter list (passed between detail → reader)
-object NovelChapterHolder {
-    var chapters: List<com.kousoyu.drift.data.NovelChapter> = emptyList()
-}
-
 // ─── Navigation Routes ────────────────────────────────────────────────────────
 object DriftRoutes {
     const val MAIN         = "main"
@@ -90,12 +85,14 @@ class MainActivity : ComponentActivity() {
         // ── Initialize auth cache (instant profile restore) ──
         com.kousoyu.drift.data.AuthManager.initialize(applicationContext)
 
-        // ── Coil: 256MB disk cache + Referer for image servers ──
-        val coilClient = okhttp3.OkHttpClient.Builder()
+        // ── Initialize reader settings (font size / line height persistence) ──
+        ReaderSettings.init(this)
+
+        // ── Coil: shared connection pool + 128MB disk cache ──
+        val coilClient = com.kousoyu.drift.data.DriftHttpClient.get(this).newBuilder()
             .addInterceptor { chain ->
                 val req = chain.request()
                 val host = req.url.host
-                // readpai.com (bilinovel covers) requires Referer
                 val newReq = if (host.contains("readpai") || host.contains("bilinovel") || host.contains("linovelib")) {
                     req.newBuilder()
                         .header("Referer", "https://www.linovelib.com/")
@@ -110,7 +107,7 @@ class MainActivity : ComponentActivity() {
                 .diskCache {
                     DiskCache.Builder()
                         .directory(cacheDir.resolve("image_cache"))
-                        .maxSizeBytes(256L * 1024 * 1024)
+                        .maxSizeBytes(128L * 1024 * 1024)
                         .build()
                 }
                 .crossfade(150)
@@ -347,7 +344,7 @@ class MainActivity : ComponentActivity() {
                             detailUrl = url,
                             onBack = { navController.popBackStack() },
                             onChapterClick = { chapterUrl, chapterName, allChapters ->
-                                NovelChapterHolder.chapters = allChapters
+                                com.kousoyu.drift.data.ChapterNavigation.novelChapters = allChapters
                                 navController.navigate(DriftRoutes.createNovelReaderRoute(chapterUrl, chapterName))
                             }
                         )
@@ -368,7 +365,7 @@ class MainActivity : ComponentActivity() {
                         NovelReaderScreen(
                             chapterUrl = url,
                             chapterName = chapterName,
-                            allChapters = NovelChapterHolder.chapters,
+                            allChapters = com.kousoyu.drift.data.ChapterNavigation.novelChapters,
                             onBack = { navController.popBackStack() },
                             onNavigateChapter = { newUrl, newName ->
                                 // Replace current reader with new chapter
@@ -489,21 +486,6 @@ fun DriftApp(
                 )
             }
         }
-    }
-}
-
-
-
-@Composable
-fun ComingSoonScreen(label: String) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(
-            text = "即将呈现: $label",
-            modifier = Modifier.padding(16.dp)
-        )
     }
 }
 

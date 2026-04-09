@@ -29,9 +29,11 @@ sealed class ReaderState {
 /**
  * Shared chapter list passed from DetailScreen to ReaderScreen.
  * Navigation routes can't carry large lists, so we use this lightweight singleton.
+ * Holds both manga and novel chapter lists.
  */
 object ChapterNavigation {
     var chapters: List<MangaChapter> = emptyList()
+    var novelChapters: List<NovelChapter> = emptyList()
 }
 
 class ReaderViewModel(app: Application) : AndroidViewModel(app) {

@@ -50,7 +50,6 @@ import com.kousoyu.drift.data.Manga
 import com.kousoyu.drift.data.MangaListState
 import com.kousoyu.drift.data.MangaViewModel
 import com.kousoyu.drift.data.SourceManager
-import com.kousoyu.drift.data.local.toDomainManga
 import com.kousoyu.drift.ui.theme.DriftTheme
 import com.kousoyu.drift.ui.theme.shimmerEffect
 import kotlinx.coroutines.launch

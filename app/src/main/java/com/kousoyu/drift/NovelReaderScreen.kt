@@ -412,10 +412,21 @@ private fun extractNovelBaseUrl(chapterUrl: String): String {
 }
 
 /**
- * Persistent reading settings — survives navigation, persists across sessions.
- * Simple static object (no SharedPreferences overhead needed for 2 values).
+ * Persistent reading settings — survives process death via SharedPreferences.
+ * Call [init] once from MainActivity.onCreate() to bind to context.
  */
 object ReaderSettings {
-    var fontSize: Float = 16f
-    var lineHeight: Float = 28f
+    private var prefs: android.content.SharedPreferences? = null
+
+    fun init(context: android.content.Context) {
+        prefs = context.getSharedPreferences("reader_settings", android.content.Context.MODE_PRIVATE)
+    }
+
+    var fontSize: Float
+        get() = prefs?.getFloat("font_size", 16f) ?: 16f
+        set(value) { prefs?.edit()?.putFloat("font_size", value)?.apply() }
+
+    var lineHeight: Float
+        get() = prefs?.getFloat("line_height", 28f) ?: 28f
+        set(value) { prefs?.edit()?.putFloat("line_height", value)?.apply() }
 }
