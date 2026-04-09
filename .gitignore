@@ -25,3 +25,6 @@ drift-release.keystore
 *.json
 !gradle/**
 !app/src/**
+
+# Release APK
+*.apk
