@@ -72,6 +72,10 @@ class UpdateManager(private val context: Context) {
     private val _updateState = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val updateState: StateFlow<UpdateState> = _updateState
 
+    /** Retains the UpdateInfo across state transitions (Available → Downloading → Error). */
+    var lastUpdateInfo: UpdateInfo? = null
+        private set
+
     private val client get() = DriftHttpClient.get()
     private var progressJob: Job? = null
     private var downloadReceiver: BroadcastReceiver? = null
@@ -123,15 +127,15 @@ class UpdateManager(private val context: Context) {
             val currentVersionName = getCurrentVersionName()
 
             if (isNewerVersion(remoteVersionName, currentVersionName)) {
-                _updateState.value = UpdateState.Available(
-                    UpdateInfo(
-                        versionName = remoteVersionName,
-                        versionCode = parseVersionCode(tagName),
-                        changelog   = body,
-                        downloadUrl = downloadUrl,
-                        fileSize    = fileSize
-                    )
+                val updateInfo = UpdateInfo(
+                    versionName = remoteVersionName,
+                    versionCode = parseVersionCode(tagName),
+                    changelog   = body,
+                    downloadUrl = downloadUrl,
+                    fileSize    = fileSize
                 )
+                lastUpdateInfo = updateInfo
+                _updateState.value = UpdateState.Available(updateInfo)
             } else {
                 _updateState.value = UpdateState.UpToDate
             }

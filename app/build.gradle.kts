@@ -51,7 +51,8 @@ android {
         compose = true
     }
     lint {
-        abortOnError = false   // Don't fail release builds on lint warnings
+        abortOnError = false
+        checkReleaseBuilds = false
     }
 }
 

@@ -265,14 +265,25 @@ fun ProfileScreen(
             }
         }
 
-        // ─── Show update dialog if available from manual check ────────────────
-        if (currentUpdateState is UpdateManager.UpdateState.Available) {
-            UpdateDialog(
-                info = currentUpdateState.info,
-                currentVersion = updateManager?.getCurrentVersionName() ?: "1.0",
-                onUpdate = { updateManager?.downloadAndInstall(currentUpdateState.info) },
-                onDismiss = { updateManager?.dismiss() }
-            )
+        // ─── Show update dialog (available / downloading / error) ────────────
+        val showDialog = currentUpdateState is UpdateManager.UpdateState.Available ||
+                currentUpdateState is UpdateManager.UpdateState.Downloading ||
+                currentUpdateState is UpdateManager.UpdateState.Error
+
+        if (showDialog) {
+            val info = when (currentUpdateState) {
+                is UpdateManager.UpdateState.Available -> currentUpdateState.info
+                else -> updateManager?.lastUpdateInfo
+            }
+            if (info != null && currentUpdateState != null) {
+                UpdateDialog(
+                    info = info,
+                    currentVersion = updateManager?.getCurrentVersionName() ?: "1.0",
+                    updateState = currentUpdateState,
+                    onUpdate = { updateManager?.downloadAndInstall(info) },
+                    onDismiss = { updateManager?.dismiss() }
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(60.dp))

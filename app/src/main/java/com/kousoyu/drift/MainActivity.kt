@@ -142,31 +142,33 @@ class MainActivity : ComponentActivity() {
             }
 
             DriftTheme(darkTheme = isDark) {
-                // ─── Show update dialog when available ────────────────────
-                if (updateState is UpdateManager.UpdateState.Available) {
-                    val info = (updateState as UpdateManager.UpdateState.Available).info
-                    UpdateDialog(
-                        info = info,
-                        currentVersion = updateManager.getCurrentVersionName(),
-                        onUpdate = { updateManager.downloadAndInstall(info) },
-                        onDismiss = { updateManager.dismiss() }
-                    )
+                // ─── Show update dialog (available / downloading / error) ──
+                val showUpdateDialog = updateState is UpdateManager.UpdateState.Available ||
+                        updateState is UpdateManager.UpdateState.Downloading ||
+                        updateState is UpdateManager.UpdateState.Error
+
+                if (showUpdateDialog) {
+                    val info = when (updateState) {
+                        is UpdateManager.UpdateState.Available ->
+                            (updateState as UpdateManager.UpdateState.Available).info
+                        else -> updateManager.lastUpdateInfo
+                    }
+                    if (info != null) {
+                        UpdateDialog(
+                            info = info,
+                            currentVersion = updateManager.getCurrentVersionName(),
+                            updateState = updateState,
+                            onUpdate = { updateManager.downloadAndInstall(info) },
+                            onDismiss = { updateManager.dismiss() }
+                        )
+                    }
                 }
 
                 val navController = rememberNavController()
 
-                // Download progress bar at top
-                Column {
-                    if (updateState is UpdateManager.UpdateState.Downloading) {
-                        UpdateDownloadingBar(
-                            progress = (updateState as UpdateManager.UpdateState.Downloading).progress
-                        )
-                    }
-
                 NavHost(
                     navController = navController,
                     startDestination = DriftRoutes.MAIN,
-                    modifier = Modifier.weight(1f)
                 ) {
                     composable(DriftRoutes.MAIN) {
                     DriftApp(
@@ -412,7 +414,6 @@ class MainActivity : ComponentActivity() {
                         )
                     }
                 }
-                } // end Column
             }
         }
     }
