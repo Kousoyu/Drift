@@ -13,7 +13,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.withContext
-import okhttp3.OkHttpClient
 import okhttp3.Request
 import org.json.JSONObject
 import java.io.File
@@ -45,8 +44,12 @@ class UpdateManager(private val context: Context) {
 
         private const val API_URL = "https://api.github.com/repos/$GITHUB_OWNER/$GITHUB_REPO/releases/latest"
 
-        // GitHub CDN 在国内很慢，通过镜像加速下载
-        private const val GITHUB_PROXY = "https://ghgo.xyz/"
+        // GitHub CDN 多代理 fallback（按优先级尝试，最后直连兜底）
+        private val DOWNLOAD_PROXIES = listOf(
+            "https://gh-proxy.com/",
+            "https://mirror.ghproxy.com/",
+            ""  // 空字符串 = 直连 GitHub（无代理）
+        )
     }
 
     data class UpdateInfo(
@@ -69,8 +72,9 @@ class UpdateManager(private val context: Context) {
     private val _updateState = MutableStateFlow<UpdateState>(UpdateState.Idle)
     val updateState: StateFlow<UpdateState> = _updateState
 
-    private val client = OkHttpClient()
+    private val client get() = DriftHttpClient.get()
     private var progressJob: Job? = null
+    private var downloadReceiver: BroadcastReceiver? = null
 
     /**
      * Check GitHub Releases API for the latest version.
@@ -114,18 +118,15 @@ class UpdateManager(private val context: Context) {
                 return
             }
 
-            // Parse remote version code from tag: "v2" → 2, "v1.1" → 11, etc.
-            val remoteVersionCode = parseVersionCode(tagName)
-            val remoteVersionName = tagName.removePrefix("v")
-            
-            // Get current version code from package info
-            val currentVersionCode = getCurrentVersionCode()
+            // Parse remote version for semantic comparison
+            val remoteVersionName = tagName.removePrefix("v").removePrefix("V")
+            val currentVersionName = getCurrentVersionName()
 
-            if (remoteVersionCode > currentVersionCode) {
+            if (isNewerVersion(remoteVersionName, currentVersionName)) {
                 _updateState.value = UpdateState.Available(
                     UpdateInfo(
                         versionName = remoteVersionName,
-                        versionCode = remoteVersionCode,
+                        versionCode = parseVersionCode(tagName),
                         changelog   = body,
                         downloadUrl = downloadUrl,
                         fileSize    = fileSize
@@ -150,12 +151,8 @@ class UpdateManager(private val context: Context) {
         downloadDir?.listFiles()?.forEach { if (it.name.endsWith(".apk")) it.delete() }
 
         val fileName = "Drift-v${info.versionName}.apk"
-        // 通过镜像代理加速 GitHub 下载
-        val proxyUrl = if (info.downloadUrl.contains("github.com")) {
-            GITHUB_PROXY + info.downloadUrl
-        } else {
-            info.downloadUrl
-        }
+        // 多代理 fallback：使用第一个可用的代理，最后直连
+        val proxyUrl = resolveDownloadUrl(info.downloadUrl)
         val request = DownloadManager.Request(Uri.parse(proxyUrl)).apply {
             setTitle("Drift 更新 v${info.versionName}")
             setDescription("正在下载新版本...")
@@ -184,7 +181,11 @@ class UpdateManager(private val context: Context) {
                     val status = if (statusIdx >= 0) cursor.getInt(statusIdx) else 0
                     cursor.close()
 
-                    if (status == DownloadManager.STATUS_SUCCESSFUL || status == DownloadManager.STATUS_FAILED) {
+                    if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                        break
+                    }
+                    if (status == DownloadManager.STATUS_FAILED) {
+                        _updateState.value = UpdateState.Error("下载失败，请重试")
                         break
                     }
                     if (total > 0) {
@@ -198,13 +199,18 @@ class UpdateManager(private val context: Context) {
             }
         }
 
+        // Unregister any previous receiver to prevent leaks
+        try { downloadReceiver?.let { context.unregisterReceiver(it) } } catch (_: Exception) {}
+
         // Register receiver to trigger install when download completes
-        val receiver = object : BroadcastReceiver() {
+        downloadReceiver = object : BroadcastReceiver() {
             override fun onReceive(ctx: Context, intent: Intent) {
                 val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
                 if (id != downloadId) return
 
                 try { ctx.unregisterReceiver(this) } catch (_: Exception) {}
+                downloadReceiver = null
+                progressJob?.cancel()
 
                 // ── 检查下载状态 ──
                 val query = DownloadManager.Query().setFilterById(downloadId)
@@ -229,7 +235,6 @@ class UpdateManager(private val context: Context) {
                 // ── 检查安装权限 ──
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     if (!ctx.packageManager.canRequestPackageInstalls()) {
-                        // 引导用户开启安装权限
                         try {
                             val settingsIntent = Intent(
                                 android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
@@ -251,13 +256,13 @@ class UpdateManager(private val context: Context) {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             context.registerReceiver(
-                receiver,
+                downloadReceiver,
                 IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
                 Context.RECEIVER_EXPORTED
             )
         } else {
             context.registerReceiver(
-                receiver,
+                downloadReceiver,
                 IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
             )
         }
@@ -311,8 +316,7 @@ class UpdateManager(private val context: Context) {
     }
 
     /**
-     * Parse version code from tag name.
-     * "v2" → 2, "v1.1" → 11, "v2.3.1" → 231
+     * Parse version code from tag name (fallback only, not used for comparison).
      */
     private fun parseVersionCode(tag: String): Int {
         val clean = tag.removePrefix("v").removePrefix("V")
@@ -327,5 +331,42 @@ class UpdateManager(private val context: Context) {
         } catch (e: NumberFormatException) {
             0
         }
+    }
+
+    /**
+     * Semantic version comparison: "1.3" > "1.2", "2.0" > "1.9"
+     * Compares each segment numerically, left to right.
+     */
+    private fun isNewerVersion(remote: String, current: String): Boolean {
+        val r = remote.split(".").mapNotNull { it.toIntOrNull() }
+        val c = current.split(".").mapNotNull { it.toIntOrNull() }
+        val len = maxOf(r.size, c.size)
+        for (i in 0 until len) {
+            val rv = r.getOrElse(i) { 0 }
+            val cv = c.getOrElse(i) { 0 }
+            if (rv > cv) return true
+            if (rv < cv) return false
+        }
+        return false  // equal
+    }
+
+    /**
+     * Resolve download URL with proxy fallback.
+     * Tries each proxy in order; falls back to direct GitHub URL.
+     */
+    private fun resolveDownloadUrl(originalUrl: String): String {
+        if (!originalUrl.contains("github.com")) return originalUrl
+        for (proxy in DOWNLOAD_PROXIES) {
+            val testUrl = if (proxy.isEmpty()) originalUrl else proxy + originalUrl
+            try {
+                val req = Request.Builder().url(testUrl).head().build()
+                val resp = client.newCall(req).execute()
+                resp.close()
+                if (resp.isSuccessful || resp.code in 301..302) {
+                    return testUrl
+                }
+            } catch (_: Exception) { /* try next */ }
+        }
+        return originalUrl  // all proxies failed, use direct URL
     }
 }
