@@ -14,8 +14,8 @@ android {
         applicationId = "com.kousoyu.drift"
         minSdk = 26
         targetSdk = 36
-        versionCode = 121
-        versionName = "1.2.1"
+        versionCode = 100
+        versionName = "1.0.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
