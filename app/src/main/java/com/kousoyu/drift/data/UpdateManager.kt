@@ -150,126 +150,132 @@ class UpdateManager(private val context: Context) {
     fun downloadAndInstall(info: UpdateInfo) {
         _updateState.value = UpdateState.Downloading(0)
 
-        // Clean old APK files
-        val downloadDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
-        downloadDir?.listFiles()?.forEach { if (it.name.endsWith(".apk")) it.delete() }
+        // Run proxy resolution + download enqueue on IO thread
+        CoroutineScope(Dispatchers.IO).launch {
+            // Clean old APK files
+            val downloadDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS)
+            downloadDir?.listFiles()?.forEach { if (it.name.endsWith(".apk")) it.delete() }
 
-        val fileName = "Drift-v${info.versionName}.apk"
-        // 多代理 fallback：使用第一个可用的代理，最后直连
-        val proxyUrl = resolveDownloadUrl(info.downloadUrl)
-        val request = DownloadManager.Request(Uri.parse(proxyUrl)).apply {
-            setTitle("Drift 更新 v${info.versionName}")
-            setDescription("正在下载新版本...")
-            setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, fileName)
-            setAllowedOverMetered(true)
-            setAllowedOverRoaming(true)
-        }
-
-        val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
-        val downloadId = downloadManager.enqueue(request)
-
-        // ── 轮询下载进度 ──
-        progressJob?.cancel()
-        progressJob = CoroutineScope(Dispatchers.IO).launch {
-            while (isActive) {
-                delay(300)
-                val query = DownloadManager.Query().setFilterById(downloadId)
-                val cursor = downloadManager.query(query)
-                if (cursor != null && cursor.moveToFirst()) {
-                    val bytesIdx = cursor.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
-                    val totalIdx = cursor.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
-                    val statusIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
-                    val downloaded = if (bytesIdx >= 0) cursor.getLong(bytesIdx) else 0L
-                    val total = if (totalIdx >= 0) cursor.getLong(totalIdx) else 0L
-                    val status = if (statusIdx >= 0) cursor.getInt(statusIdx) else 0
-                    cursor.close()
-
-                    if (status == DownloadManager.STATUS_SUCCESSFUL) {
-                        break
-                    }
-                    if (status == DownloadManager.STATUS_FAILED) {
-                        _updateState.value = UpdateState.Error("下载失败，请重试")
-                        break
-                    }
-                    if (total > 0) {
-                        val pct = ((downloaded * 100) / total).toInt().coerceIn(0, 100)
-                        _updateState.value = UpdateState.Downloading(pct)
-                    }
-                } else {
-                    cursor?.close()
-                    break
-                }
+            val fileName = "Drift-v${info.versionName}.apk"
+            // 多代理 fallback：使用第一个可用的代理，最后直连
+            val proxyUrl = resolveDownloadUrl(info.downloadUrl)
+            val request = DownloadManager.Request(Uri.parse(proxyUrl)).apply {
+                setTitle("Drift 更新 v${info.versionName}")
+                setDescription("正在下载新版本...")
+                setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                setDestinationInExternalFilesDir(context, Environment.DIRECTORY_DOWNLOADS, fileName)
+                setAllowedOverMetered(true)
+                setAllowedOverRoaming(true)
             }
-        }
 
-        // Unregister any previous receiver to prevent leaks
-        try { downloadReceiver?.let { context.unregisterReceiver(it) } } catch (_: Exception) {}
+            val downloadManager = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+            val downloadId = downloadManager.enqueue(request)
 
-        // Register receiver to trigger install when download completes
-        downloadReceiver = object : BroadcastReceiver() {
-            override fun onReceive(ctx: Context, intent: Intent) {
-                val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
-                if (id != downloadId) return
+            // ── 轮询下载进度 ──
+            progressJob?.cancel()
+            progressJob = launch {
+                while (isActive) {
+                    delay(300)
+                    val query = DownloadManager.Query().setFilterById(downloadId)
+                    val cursor = downloadManager.query(query)
+                    if (cursor != null && cursor.moveToFirst()) {
+                        val bytesIdx = cursor.getColumnIndex(DownloadManager.COLUMN_BYTES_DOWNLOADED_SO_FAR)
+                        val totalIdx = cursor.getColumnIndex(DownloadManager.COLUMN_TOTAL_SIZE_BYTES)
+                        val statusIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                        val downloaded = if (bytesIdx >= 0) cursor.getLong(bytesIdx) else 0L
+                        val total = if (totalIdx >= 0) cursor.getLong(totalIdx) else 0L
+                        val status = if (statusIdx >= 0) cursor.getInt(statusIdx) else 0
+                        cursor.close()
 
-                try { ctx.unregisterReceiver(this) } catch (_: Exception) {}
-                downloadReceiver = null
-                progressJob?.cancel()
-
-                // ── 检查下载状态 ──
-                val query = DownloadManager.Query().setFilterById(downloadId)
-                val cursor = downloadManager.query(query)
-                if (cursor != null && cursor.moveToFirst()) {
-                    val statusIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
-                    val status = if (statusIdx >= 0) cursor.getInt(statusIdx) else -1
-                    cursor.close()
-
-                    if (status != DownloadManager.STATUS_SUCCESSFUL) {
-                        _updateState.value = UpdateState.Error("下载失败，请重试")
-                        return
-                    }
-                }
-
-                val apkFile = File(downloadDir, fileName)
-                if (!apkFile.exists() || apkFile.length() < 1024) {
-                    _updateState.value = UpdateState.Error("下载文件无效，请重试")
-                    return
-                }
-
-                // ── 检查安装权限 ──
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    if (!ctx.packageManager.canRequestPackageInstalls()) {
-                        try {
-                            val settingsIntent = Intent(
-                                android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                                Uri.parse("package:${ctx.packageName}")
-                            ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
-                            ctx.startActivity(settingsIntent)
-                            _updateState.value = UpdateState.Error("请允许安装权限后重试")
-                        } catch (_: Exception) {
-                            _updateState.value = UpdateState.Error("请在设置中允许安装未知来源应用")
+                        if (status == DownloadManager.STATUS_SUCCESSFUL) {
+                            break
                         }
-                        return
+                        if (status == DownloadManager.STATUS_FAILED) {
+                            _updateState.value = UpdateState.Error("下载失败，请重试")
+                            break
+                        }
+                        if (total > 0) {
+                            val pct = ((downloaded * 100) / total).toInt().coerceIn(0, 100)
+                            _updateState.value = UpdateState.Downloading(pct)
+                        }
+                    } else {
+                        cursor?.close()
+                        break
                     }
                 }
-
-                installApk(ctx, apkFile)
-                _updateState.value = UpdateState.Idle
             }
-        }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(
-                downloadReceiver,
-                IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
-                Context.RECEIVER_EXPORTED
-            )
-        } else {
-            context.registerReceiver(
-                downloadReceiver,
-                IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
-            )
-        }
+            // Unregister any previous receiver to prevent leaks
+            try { downloadReceiver?.let { context.unregisterReceiver(it) } } catch (_: Exception) {}
+
+            // Register receiver to trigger install when download completes
+            downloadReceiver = object : BroadcastReceiver() {
+                override fun onReceive(ctx: Context, intent: Intent) {
+                    val id = intent.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1)
+                    if (id != downloadId) return
+
+                    try { ctx.unregisterReceiver(this) } catch (_: Exception) {}
+                    downloadReceiver = null
+                    progressJob?.cancel()
+
+                    // ── 检查下载状态 ──
+                    val query = DownloadManager.Query().setFilterById(downloadId)
+                    val cursor = downloadManager.query(query)
+                    if (cursor != null && cursor.moveToFirst()) {
+                        val statusIdx = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                        val status = if (statusIdx >= 0) cursor.getInt(statusIdx) else -1
+                        cursor.close()
+
+                        if (status != DownloadManager.STATUS_SUCCESSFUL) {
+                            _updateState.value = UpdateState.Error("下载失败，请重试")
+                            return
+                        }
+                    }
+
+                    val apkFile = File(downloadDir, fileName)
+                    if (!apkFile.exists() || apkFile.length() < 1024) {
+                        _updateState.value = UpdateState.Error("下载文件无效，请重试")
+                        return
+                    }
+
+                    // ── 检查安装权限 ──
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                        if (!ctx.packageManager.canRequestPackageInstalls()) {
+                            try {
+                                val settingsIntent = Intent(
+                                    android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                                    Uri.parse("package:${ctx.packageName}")
+                                ).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+                                ctx.startActivity(settingsIntent)
+                                _updateState.value = UpdateState.Error("请允许安装权限后重试")
+                            } catch (_: Exception) {
+                                _updateState.value = UpdateState.Error("请在设置中允许安装未知来源应用")
+                            }
+                            return
+                        }
+                    }
+
+                    installApk(ctx, apkFile)
+                    _updateState.value = UpdateState.Idle
+                }
+            }
+
+            // registerReceiver must run on main thread
+            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    context.registerReceiver(
+                        downloadReceiver,
+                        IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE),
+                        Context.RECEIVER_EXPORTED
+                    )
+                } else {
+                    context.registerReceiver(
+                        downloadReceiver,
+                        IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+                    )
+                }
+            }
+        } // end CoroutineScope
     }
 
     /**
