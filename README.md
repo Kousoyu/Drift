@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="app/src/main/res/mipmap-xxhdpi/ic_launcher.webp" width="100" height="100" alt="Drift Logo">
+  <img src="app/src/main/res/drawable/ic_drift_logo.png" width="100" height="100" alt="Drift Logo">
   <h1>Drift (漂移)</h1>
   <p><strong>一个纯净、高性能的漫画与轻小说聚合阅读器</strong></p>
 
